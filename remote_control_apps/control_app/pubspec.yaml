@@ -5,7 +5,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.9.0-238.0.dev
+  sdk: ^3.8.1
 
 dependencies:
   flutter:
@@ -14,7 +14,7 @@ dependencies:
   
   # WebSocket and WebRTC
   web_socket_channel: ^2.4.0
-  flutter_webrtc: ^0.9.48
+  flutter_webrtc: ^0.12.8
   
   # Network and discovery
   network_info_plus: ^4.1.0

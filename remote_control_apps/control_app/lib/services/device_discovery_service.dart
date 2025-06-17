@@ -6,7 +6,7 @@ import 'package:network_info_plus/network_info_plus.dart';
 import '../models/device.dart';
 
 class DeviceDiscoveryService {
-  static const int _defaultPort = 8080;
+  static const int _defaultPort = 4321;
   static const int _timeoutSeconds = 2;
   
   final NetworkInfo _networkInfo = NetworkInfo();
