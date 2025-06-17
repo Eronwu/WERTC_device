@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:network_info_plus/network_info_plus.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/device.dart';
 
 class DeviceDiscoveryService {
@@ -66,43 +67,25 @@ class DeviceDiscoveryService {
   
   Future<Device?> _scanDevice(String ipAddress, int port) async {
     try {
-      final socket = await Socket.connect(
-        ipAddress, 
-        port,
-        timeout: const Duration(seconds: _timeoutSeconds),
-      );
+      // Create WebSocket connection
+      final uri = Uri.parse('ws://$ipAddress:$port');
+      final channel = WebSocketChannel.connect(uri);
       
       // Send a simple ping message
-      socket.write('{"type":"ping"}');
-      
-      // Wait for response
-      final completer = Completer<String>();
-      late StreamSubscription subscription;
-      
-      subscription = socket.listen(
-        (data) {
-          final response = String.fromCharCodes(data);
-          completer.complete(response);
-          subscription.cancel();
-        },
-        onError: (error) {
-          if (!completer.isCompleted) {
-            completer.completeError(error);
-          }
-          subscription.cancel();
-        },
-      );
+      channel.sink.add('{"type":"ping"}');
       
       // Wait for response with timeout
-      final response = await completer.future.timeout(
+      final response = await channel.stream.first.timeout(
         const Duration(seconds: _timeoutSeconds),
       );
       
-      socket.close();
+      // Close the connection
+      await channel.sink.close();
       
       // Parse device info from response
       try {
-        final json = jsonDecode(response);
+        final responseStr = response.toString();
+        final json = jsonDecode(responseStr);
         if (json['type'] == 'device_info') {
           return Device(
             id: json['device_id'] ?? ipAddress,

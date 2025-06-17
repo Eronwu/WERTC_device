@@ -26,6 +26,7 @@ public class WebSocketService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        stopExistingServer();
         startWebSocketServer();
     }
     
@@ -42,9 +43,16 @@ public class WebSocketService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        stopExistingServer();
+    }
+    
+    private void stopExistingServer() {
         if (server != null) {
             try {
-                server.stop();
+                Log.d(TAG, "Stopping existing WebSocket server");
+                server.stop(1000); // Wait up to 1 second for graceful shutdown
+                server = null;
+                Thread.sleep(100); // Brief pause to ensure port is released
             } catch (Exception e) {
                 Log.e(TAG, "Error stopping WebSocket server", e);
             }
@@ -52,19 +60,20 @@ public class WebSocketService extends Service {
     }
     
     private void startWebSocketServer() {
-        server = new WebSocketServer(new InetSocketAddress(PORT)) {
-            @Override
-            public void onOpen(WebSocket conn, ClientHandshake handshake) {
-                Log.d(TAG, "New client connected: " + conn.getRemoteSocketAddress());
-                clients.put(conn, "");
-                
-                // Send device info
-                JsonObject deviceInfo = new JsonObject();
-                deviceInfo.addProperty("type", "device_info");
-                deviceInfo.addProperty("device_name", android.os.Build.MODEL);
-                deviceInfo.addProperty("device_id", android.os.Build.SERIAL);
-                conn.send(gson.toJson(deviceInfo));
-            }
+        try {
+            server = new WebSocketServer(new InetSocketAddress(PORT)) {
+                @Override
+                public void onOpen(WebSocket conn, ClientHandshake handshake) {
+                    Log.d(TAG, "New client connected: " + conn.getRemoteSocketAddress());
+                    clients.put(conn, "");
+                    
+                    // Send device info
+                    JsonObject deviceInfo = new JsonObject();
+                    deviceInfo.addProperty("type", "device_info");
+                    deviceInfo.addProperty("device_name", android.os.Build.MODEL);
+                    deviceInfo.addProperty("device_id", android.os.Build.SERIAL);
+                    conn.send(gson.toJson(deviceInfo));
+                }
             
             @Override
             public void onClose(WebSocket conn, int code, String reason, boolean remote) {
@@ -89,7 +98,24 @@ public class WebSocketService extends Service {
             }
         };
         
+        // Enable address reuse to prevent "Address already in use" errors
+        server.setReuseAddr(true);
+        
         server.start();
+        Log.d(TAG, "Starting WebSocket server on port " + PORT);
+        
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to start WebSocket server", e);
+            // Retry after a short delay
+            new Thread(() -> {
+                try {
+                    Thread.sleep(2000);
+                    startWebSocketServer();
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }).start();
+        }
     }
     
     private void handleMessage(WebSocket conn, String message) {
@@ -98,6 +124,9 @@ public class WebSocketService extends Service {
             String type = json.get("type").getAsString();
             
             switch (type) {
+                case "ping":
+                    handlePing(conn, json);
+                    break;
                 case "offer":
                     handleOffer(conn, json);
                     break;
@@ -116,6 +145,19 @@ public class WebSocketService extends Service {
         } catch (Exception e) {
             Log.e(TAG, "Error handling message", e);
         }
+    }
+    
+    private void handlePing(WebSocket conn, JsonObject json) {
+        // Handle ping request and respond with device info
+        Log.d(TAG, "Handling ping request");
+        
+        JsonObject deviceInfo = new JsonObject();
+        deviceInfo.addProperty("type", "device_info");
+        deviceInfo.addProperty("device_name", android.os.Build.MODEL);
+        deviceInfo.addProperty("device_id", android.os.Build.SERIAL);
+        
+        conn.send(gson.toJson(deviceInfo));
+        Log.d(TAG, "Sent device info response");
     }
     
     private void handleOffer(WebSocket conn, JsonObject json) {
