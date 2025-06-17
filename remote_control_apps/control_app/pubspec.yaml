@@ -1,0 +1,37 @@
+name: control_app
+description: "Remote screen control app for Android devices."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.0-238.0.dev
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  
+  # WebSocket and WebRTC
+  web_socket_channel: ^2.4.0
+  flutter_webrtc: ^0.9.48
+  
+  # Network and discovery
+  network_info_plus: ^4.1.0
+  permission_handler: ^11.0.1
+  
+  # UI and state management
+  provider: ^6.1.1
+  
+  # Utilities
+  json_annotation: ^4.8.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  json_serializable: ^6.7.1
+  build_runner: ^2.4.7
+
+flutter:
+  uses-material-design: true
