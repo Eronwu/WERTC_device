@@ -9,6 +9,7 @@ import '../models/device.dart';
 class DeviceDiscoveryService {
   static const int _defaultPort = 4321;
   static const int _timeoutSeconds = 2;
+  static const String _targetIP = '192.168.31.89';  // 直接指定目标设备IP
   
   final NetworkInfo _networkInfo = NetworkInfo();
   final StreamController<Device> _deviceController = StreamController<Device>.broadcast();
@@ -19,6 +20,19 @@ class DeviceDiscoveryService {
     final List<Device> devices = [];
     
     try {
+      // 直接连接到指定的设备IP
+      debugPrint('Connecting directly to: $_targetIP:$_defaultPort');
+      
+      final device = await _scanDevice(_targetIP, _defaultPort);
+      if (device != null) {
+        devices.add(device);
+        _deviceController.add(device);
+        debugPrint('Successfully connected to device: ${device.name}');
+      } else {
+        debugPrint('Failed to connect to device at $_targetIP:$_defaultPort');
+      }
+      
+      /* 注释掉之前的网络扫描方法
       // Get current network info
       final wifiIP = await _networkInfo.getWifiIP();
       if (wifiIP == null) {
@@ -40,6 +54,7 @@ class DeviceDiscoveryService {
       
       // Scan IP range
       final List<Future<Device?>> scanTasks = [];
+      // Scan full IP range to include devices like 192.168.10.11
       for (int i = 1; i <= 254; i++) {
         final targetIP = '$networkPrefix.$i';
         scanTasks.add(_scanDevice(targetIP, _defaultPort));
@@ -55,6 +70,7 @@ class DeviceDiscoveryService {
           _deviceController.add(device);
         }
       }
+      */
       
       debugPrint('Found ${devices.length} devices');
       
@@ -69,6 +85,7 @@ class DeviceDiscoveryService {
     try {
       // Create WebSocket connection
       final uri = Uri.parse('ws://$ipAddress:$port');
+      debugPrint('Attempting to connect to: $uri');
       final channel = WebSocketChannel.connect(uri);
       
       // Send a simple ping message
@@ -100,7 +117,18 @@ class DeviceDiscoveryService {
       
     } catch (e) {
       // Connection failed - device not available
-      // This is expected for most IPs, so we don't log it
+      // Log specific errors for debugging
+      if (e.toString().contains('No route to host') || 
+          e.toString().contains('Connection refused') ||
+          e.toString().contains('Network is unreachable') ||
+          e.toString().contains('WebSocketChannelException')) {
+        debugPrint('Network error connecting to $ipAddress:$port - $e');
+        // Log additional details for WebSocket errors
+        if (e.toString().contains('port =') && !e.toString().contains('port = $port')) {
+          debugPrint('WARNING: Port mismatch detected! Expected $port but error shows different port');
+        }
+      }
+      // Other errors are expected for most IPs, so we don't log them
     }
     
     return null;

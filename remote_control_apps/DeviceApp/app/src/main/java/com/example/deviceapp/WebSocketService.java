@@ -77,7 +77,8 @@ public class WebSocketService extends Service {
     
     private void startWebSocketServer() {
         try {
-            server = new WebSocketServer(new InetSocketAddress(PORT)) {
+            // Bind to all network interfaces (0.0.0.0) instead of localhost
+            server = new WebSocketServer(new InetSocketAddress("0.0.0.0", PORT)) {
                 @Override
                 public void onOpen(WebSocket conn, ClientHandshake handshake) {
                     Log.d(TAG, "New client connected: " + conn.getRemoteSocketAddress());
@@ -116,7 +117,26 @@ public class WebSocketService extends Service {
             
             @Override
             public void onStart() {
-                Log.d(TAG, "WebSocket server started on port " + PORT);
+                Log.d(TAG, "WebSocket server started on 0.0.0.0:" + PORT);
+                Log.d(TAG, "Server address: " + server.getAddress());
+                // Log network interfaces for debugging
+                try {
+                    java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
+                    while (interfaces.hasMoreElements()) {
+                        java.net.NetworkInterface ni = interfaces.nextElement();
+                        if (ni.isUp() && !ni.isLoopback()) {
+                            java.util.Enumeration<java.net.InetAddress> addresses = ni.getInetAddresses();
+                            while (addresses.hasMoreElements()) {
+                                java.net.InetAddress addr = addresses.nextElement();
+                                if (addr instanceof java.net.Inet4Address) {
+                                    Log.d(TAG, "Available network interface: " + ni.getName() + " - " + addr.getHostAddress());
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error listing network interfaces", e);
+                }
             }
         };
         

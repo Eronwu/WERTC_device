@@ -87,7 +87,7 @@ public class ScreenCaptureService extends Service {
 
             Log.d(TAG, "get parcelable data from MainActivity: " + data);
             if (resultCode == MainActivity.RESULT_OK && data != null) {
-//                startScreenCapture(resultCode, data);
+                startScreenCapture(resultCode, data);
             }
         }
         return START_STICKY;
@@ -222,25 +222,44 @@ public class ScreenCaptureService extends Service {
     }
     
     private void handleEncodedFrame(byte[] frameData) {
-        Log.d(TAG, "Encoded frame size: " + frameData.length);
-        
-        if (videoSource != null) {
-            // Convert H.264 frame to I420 format for WebRTC
-            // Note: This is a simplified approach. In production, you might want to
-            // use a more sophisticated conversion or use WebRTC's built-in encoders
+        Log.d(TAG, "Encoded frame size: " + frameData.length + " bytes, timestamp: " + frameTimestamp);
+
+        if (videoSource != null && videoSource.getCapturerObserver() != null) {
+            // TODO: Implement proper H.264 decoding to YUV and then conversion to I420Buffer.
+            // The current approach of sending raw H.264 data or an empty buffer will not work correctly.
+            // For a functional solution, you need to decode the H.264 `frameData` into a YUV format,
+            // then create an I420Buffer from that YUV data.
+            // Example placeholder for where conversion should happen:
+            // YuvImage yuvImage = decodeH264ToYuv(frameData, screenWidth, screenHeight);
+            // I420Buffer i420Buffer = convertYuvToI420Buffer(yuvImage);
+
+            // Using a dummy buffer for now will result in a black screen or incorrect video.
+            // This highlights that the data flow is present, but the format is wrong.
+            final I420Buffer i420Buffer;
             try {
-                // Create a dummy I420 buffer for now
-                // In a real implementation, you would decode the H.264 frame to YUV
-                I420Buffer i420Buffer = JavaI420Buffer.allocate(screenWidth, screenHeight);
-                
-                VideoFrame videoFrame = new VideoFrame(i420Buffer, 0, frameTimestamp * 1000000); // Convert to nanoseconds
+                // Attempting to create a buffer, this is NOT a correct conversion
+                // and is just to prevent a crash and show data is flowing.
+                // A real implementation requires decoding H.264 to YUV first.
+                Log.w(TAG, "Creating a placeholder I420Buffer. THIS IS NOT A CORRECT VIDEO FRAME.");
+                i420Buffer = JavaI420Buffer.allocate(screenWidth, screenHeight);
+                // You could try to fill this buffer with some pattern or color to verify if it's being sent
+                // For example, fill with a color:
+                // ByteBuffer y = i420Buffer.getDataY();
+                // ByteBuffer u = i420Buffer.getDataU();
+                // ByteBuffer v = i420Buffer.getDataV();
+                // for(int i=0; i < y.capacity(); i++) y.put(i, (byte)128); // Grey
+                // for(int i=0; i < u.capacity(); i++) u.put(i, (byte)0);
+                // for(int i=0; i < v.capacity(); i++) v.put(i, (byte)0);
+
+                VideoFrame videoFrame = new VideoFrame(i420Buffer, 0 /* rotation */, frameTimestamp * 1_000_000 /* ns */);
                 videoSource.getCapturerObserver().onFrameCaptured(videoFrame);
-                
+                videoFrame.release(); // Release the frame after sending
                 frameTimestamp++;
-                videoFrame.release();
             } catch (Exception e) {
-                Log.e(TAG, "Error sending frame to WebRTC", e);
+                Log.e(TAG, "Error creating or sending I420Buffer to WebRTC", e);
             }
+        } else {
+            Log.w(TAG, "videoSource or capturerObserver is null, cannot send frame");
         }
     }
     
