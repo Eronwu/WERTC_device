@@ -63,7 +63,12 @@ class WebRTCService {
   Future<void> createOffer() async {
     if (_peerConnection == null) return;
     
-    final offer = await _peerConnection!.createOffer();
+    final constraints = {
+      'offerToReceiveAudio': false,
+      'offerToReceiveVideo': true,
+    };
+    
+    final offer = await _peerConnection!.createOffer(constraints);
     await _peerConnection!.setLocalDescription(offer);
     
     _webSocketService.sendOffer(offer.sdp!);
@@ -75,10 +80,16 @@ class WebRTCService {
     
     switch (type) {
       case 'offer':
-        await _handleOffer(message['sdp']);
+        // Handle nested sdp object from device
+        final sdpData = message['sdp'];
+        final sdpString = sdpData is Map ? sdpData['sdp'] : sdpData;
+        await _handleOffer(sdpString);
         break;
       case 'answer':
-        await _handleAnswer(message['sdp']);
+        // Handle nested sdp object from device
+        final sdpData = message['sdp'];
+        final sdpString = sdpData is Map ? sdpData['sdp'] : sdpData;
+        await _handleAnswer(sdpString);
         break;
       case 'ice_candidate':
         await _handleIceCandidate(message);
@@ -113,10 +124,16 @@ class WebRTCService {
   Future<void> _handleIceCandidate(Map<String, dynamic> message) async {
     if (_peerConnection == null) return;
     
+    // Handle nested candidate object from device
+    final candidateData = message['candidate'];
+    final candidateString = candidateData is Map ? candidateData['candidate'] : candidateData;
+    final sdpMid = candidateData is Map ? candidateData['sdpMid'] : message['sdpMid'];
+    final sdpMLineIndex = candidateData is Map ? candidateData['sdpMLineIndex'] : message['sdpMLineIndex'];
+    
     final candidate = RTCIceCandidate(
-      message['candidate'],
-      message['sdpMid'],
-      message['sdpMLineIndex'],
+      candidateString,
+      sdpMid,
+      sdpMLineIndex,
     );
     
     await _peerConnection!.addCandidate(candidate);

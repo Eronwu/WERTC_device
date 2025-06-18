@@ -13,11 +13,22 @@ import android.media.projection.MediaProjectionManager;
 import android.os.IBinder;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.Display;
 import android.view.Surface;
 import android.view.WindowManager;
 
+import org.webrtc.VideoSource;
+import org.webrtc.VideoFrame;
+import org.webrtc.JavaI420Buffer;
+import org.webrtc.VideoFrame.I420Buffer;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.content.Context;
+import android.os.Build;
 
 public class ScreenCaptureService extends Service {
     private static final String TAG = "ScreenCaptureService";
@@ -30,6 +41,9 @@ public class ScreenCaptureService extends Service {
     private VirtualDisplay virtualDisplay;
     private MediaCodec encoder;
     private Surface inputSurface;
+    private boolean isCapturing = false;
+    private VideoSource videoSource;
+    private long frameTimestamp = 0;
     
     private int screenWidth;
     private int screenHeight;
@@ -38,20 +52,57 @@ public class ScreenCaptureService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        Log.d(TAG, "ScreenCaptureService created");
         initScreenMetrics();
+        
+        // Set reference in WebSocketService
+        WebSocketService webSocketService = WebSocketService.getInstance();
+        if (webSocketService != null) {
+            webSocketService.setScreenCaptureService(this);
+            Log.d(TAG, "Set ScreenCaptureService reference in WebSocketService");
+        } else {
+            Log.w(TAG, "WebSocketService instance not available yet");
+        }
     }
     
+    private static final String NOTIFICATION_CHANNEL_ID = "ScreenCaptureServiceChannel";
+    private static final int NOTIFICATION_ID = 1;
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        createNotificationChannel();
+        Notification notification = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            notification = new Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
+                    .setContentTitle("屏幕共享服务")
+                    .setContentText("正在进行屏幕共享")
+                    .setSmallIcon(R.mipmap.ic_launcher) // 确保你的mipmap中有ic_launcher
+                    .build();
+        }
+        startForeground(NOTIFICATION_ID, notification);
+
         if (intent != null) {
             int resultCode = intent.getIntExtra("resultCode", -1);
             Intent data = intent.getParcelableExtra("data");
-            
-            if (resultCode != -1 && data != null) {
-                startScreenCapture(resultCode, data);
+
+            Log.d(TAG, "get parcelable data from MainActivity: " + data);
+            if (resultCode == MainActivity.RESULT_OK && data != null) {
+//                startScreenCapture(resultCode, data);
             }
         }
         return START_STICKY;
+    }
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel serviceChannel = new NotificationChannel(
+                    NOTIFICATION_CHANNEL_ID,
+                    "屏幕共享服务通知",
+                    NotificationManager.IMPORTANCE_DEFAULT
+            );
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            manager.createNotificationChannel(serviceChannel);
+        }
     }
     
     @Override
@@ -83,7 +134,8 @@ public class ScreenCaptureService extends Service {
             MediaProjectionManager projectionManager = 
                 (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
             mediaProjection = projectionManager.getMediaProjection(resultCode, data);
-            
+            Log.d(TAG, "get MediaProjection instance from MainActivity");
+
             // Initialize MediaCodec encoder
             initEncoder();
             
@@ -134,6 +186,7 @@ public class ScreenCaptureService extends Service {
         });
         
         encoder.start();
+        Log.d(TAG, "MediaCodec started");
     }
     
     private void createVirtualDisplay() {
@@ -147,6 +200,11 @@ public class ScreenCaptureService extends Service {
             null,
             null
         );
+        Log.d(TAG, "VirtualDisplay created");
+    }
+    
+    public void setVideoSource(VideoSource videoSource) {
+        this.videoSource = videoSource;
     }
     
     private void handleEncodedFrame(MediaCodec codec, int index, MediaCodec.BufferInfo info) {
@@ -157,11 +215,33 @@ public class ScreenCaptureService extends Service {
             encodedData.position(info.offset);
             encodedData.get(frameData, 0, info.size);
             
-            // TODO: Send frame data to WebRTC
-            Log.d(TAG, "Encoded frame: " + info.size + " bytes");
+            handleEncodedFrame(frameData);
         }
         
         codec.releaseOutputBuffer(index, false);
+    }
+    
+    private void handleEncodedFrame(byte[] frameData) {
+        Log.d(TAG, "Encoded frame size: " + frameData.length);
+        
+        if (videoSource != null) {
+            // Convert H.264 frame to I420 format for WebRTC
+            // Note: This is a simplified approach. In production, you might want to
+            // use a more sophisticated conversion or use WebRTC's built-in encoders
+            try {
+                // Create a dummy I420 buffer for now
+                // In a real implementation, you would decode the H.264 frame to YUV
+                I420Buffer i420Buffer = JavaI420Buffer.allocate(screenWidth, screenHeight);
+                
+                VideoFrame videoFrame = new VideoFrame(i420Buffer, 0, frameTimestamp * 1000000); // Convert to nanoseconds
+                videoSource.getCapturerObserver().onFrameCaptured(videoFrame);
+                
+                frameTimestamp++;
+                videoFrame.release();
+            } catch (Exception e) {
+                Log.e(TAG, "Error sending frame to WebRTC", e);
+            }
+        }
     }
     
     private void stopScreenCapture() {

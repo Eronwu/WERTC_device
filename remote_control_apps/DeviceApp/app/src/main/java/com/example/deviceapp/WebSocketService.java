@@ -10,6 +10,7 @@ import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
 
 import java.net.InetSocketAddress;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.google.gson.Gson;
@@ -20,12 +21,18 @@ public class WebSocketService extends Service {
     private static final int PORT = 4321;
     
     private WebSocketServer server;
-    private ConcurrentHashMap<WebSocket, String> clients = new ConcurrentHashMap<>();
+    private final Map<WebSocket, String> clients = new ConcurrentHashMap<>();
+    private final Map<WebSocket, WebRTCManager> webRTCManagers = new ConcurrentHashMap<>();
     private Gson gson = new Gson();
+    private ScreenCaptureService screenCaptureService;
+    
+    private static WebSocketService instance;
     
     @Override
     public void onCreate() {
         super.onCreate();
+        Log.d(TAG, "WebSocketService created");
+        instance = this;
         stopExistingServer();
         startWebSocketServer();
     }
@@ -40,10 +47,19 @@ public class WebSocketService extends Service {
         return null;
     }
     
+    public void setScreenCaptureService(ScreenCaptureService screenCaptureService) {
+        this.screenCaptureService = screenCaptureService;
+    }
+    
     @Override
     public void onDestroy() {
         super.onDestroy();
+        instance = null;
         stopExistingServer();
+    }
+    
+    public static WebSocketService getInstance() {
+        return instance;
     }
     
     private void stopExistingServer() {
@@ -79,6 +95,12 @@ public class WebSocketService extends Service {
             public void onClose(WebSocket conn, int code, String reason, boolean remote) {
                 Log.d(TAG, "Client disconnected: " + conn.getRemoteSocketAddress());
                 clients.remove(conn);
+                
+                // Clean up WebRTC connection
+                WebRTCManager webRTCManager = webRTCManagers.remove(conn);
+                if (webRTCManager != null) {
+                    webRTCManager.cleanup();
+                }
             }
             
             @Override
@@ -161,21 +183,44 @@ public class WebSocketService extends Service {
     }
     
     private void handleOffer(WebSocket conn, JsonObject json) {
-        // Handle WebRTC offer
         Log.d(TAG, "Handling WebRTC offer");
-        // TODO: Implement WebRTC offer handling
+        
+        if (screenCaptureService == null) {
+            Log.e(TAG, "ScreenCaptureService not available");
+            return;
+        }
+        
+        // Create WebRTC manager for this connection if not exists
+        WebRTCManager webRTCManager = webRTCManagers.get(conn);
+        if (webRTCManager == null) {
+            webRTCManager = new WebRTCManager(this, screenCaptureService);
+            webRTCManager.createPeerConnection(conn);
+            webRTCManagers.put(conn, webRTCManager);
+        }
+        
+        // Handle the offer
+        webRTCManager.handleOffer(json);
     }
     
     private void handleAnswer(WebSocket conn, JsonObject json) {
-        // Handle WebRTC answer
         Log.d(TAG, "Handling WebRTC answer");
-        // TODO: Implement WebRTC answer handling
+        
+        WebRTCManager webRTCManager = webRTCManagers.get(conn);
+        if (webRTCManager != null) {
+            // Note: Device typically doesn't receive answers, it sends them
+            Log.w(TAG, "Received unexpected answer from client");
+        }
     }
     
     private void handleIceCandidate(WebSocket conn, JsonObject json) {
-        // Handle ICE candidate
         Log.d(TAG, "Handling ICE candidate");
-        // TODO: Implement ICE candidate handling
+        
+        WebRTCManager webRTCManager = webRTCManagers.get(conn);
+        if (webRTCManager != null) {
+            webRTCManager.handleIceCandidate(json);
+        } else {
+            Log.w(TAG, "No WebRTC manager found for ICE candidate");
+        }
     }
     
     private void handleControlEvent(WebSocket conn, JsonObject json) {
