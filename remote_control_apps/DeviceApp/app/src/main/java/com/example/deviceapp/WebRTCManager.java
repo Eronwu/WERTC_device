@@ -26,6 +26,9 @@ public class WebRTCManager {
     private Gson gson = new Gson();
     private ScreenCaptureService screenCaptureService;
     private TouchControlService touchControlService;
+
+    private final static int FRAME_RATE = 30; // the frame rate seems no effect with the screen capture
+    private final static int MAX_BITRATE = 500000; // Reduced to 0.5 Mbps for lower latency, before is 2000000
     
     private static final String[] MANDATORY_FIELDS = {
         "OfferToReceiveAudio",
@@ -70,7 +73,8 @@ public class WebRTCManager {
         this.webSocket = webSocket;
         
         List<PeerConnection.IceServer> iceServers = new ArrayList<>();
-        iceServers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer());
+        // 注释或删除STUN服务器配置
+//        iceServers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer());
         
         PeerConnection.RTCConfiguration rtcConfig = new PeerConnection.RTCConfiguration(iceServers);
         rtcConfig.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED;
@@ -78,6 +82,13 @@ public class WebRTCManager {
         rtcConfig.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE;
         rtcConfig.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY;
         
+        // Low latency optimizations
+//         rtcConfig.iceConnectionReceivingTimeout = 1000; // 1 second timeout
+        rtcConfig.keyType = PeerConnection.KeyType.ECDSA; // Faster key exchange
+        rtcConfig.iceCandidatePoolSize = 0; // 不预收集候选，节省资源
+        rtcConfig.iceTransportsType = PeerConnection.IceTransportsType.ALL; // 改为HOST以仅使用本地候选
+        rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.PLAN_B; // 统一计划（Unified Plan）是现代标准，但对于本地通信，Plan B 可能更简单
+
         peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, new PeerConnectionObserver());
         
         // Create data channel for control events
@@ -120,10 +131,15 @@ public class WebRTCManager {
                 // Configure sender parameters for screen sharing
                 RtpParameters parameters = sender.getParameters();
                 if (parameters != null) {
-                    // Set up encoding parameters for screen sharing
+                    // Set up encoding parameters for low latency screen sharing
                     for (RtpParameters.Encoding encoding : parameters.encodings) {
-                        encoding.maxBitrateBps = 2000000; // 2 Mbps max for screen share
-                        encoding.maxFramerate = 30; // 30 fps max
+                        encoding.maxBitrateBps = MAX_BITRATE;
+//                        encoding.minBitrateBps = 500000;  // Minimum 500 Kbps
+                        encoding.maxFramerate = FRAME_RATE;
+                        // TODO: need to set the value by setting button.
+                        encoding.scaleResolutionDownBy = 2.0; // No downscaling
+                        // Enable adaptive bitrate for network conditions
+//                        encoding.adaptive = true;
                     }
                     sender.setParameters(parameters);
                     Log.d(TAG, "Configured sender parameters for screen sharing");
@@ -154,8 +170,9 @@ public class WebRTCManager {
                 Log.d(TAG, "Offer created successfully");
                 // Only show in debug mode
 //                Log.d(TAG, "Original Offer SDP: " + sessionDescription.description);
-                
+
                 // Fix SDP to use sendonly for video (screen sharing sender)
+                // if device can set VP8 over VP9 for lower latency, it will be good. but set VP8 is not work.
                 String modifiedSdp = sessionDescription.description.replace("a=sendrecv", "a=sendonly");
                 SessionDescription fixedSessionDescription = new SessionDescription(
                     sessionDescription.type, modifiedSdp);
