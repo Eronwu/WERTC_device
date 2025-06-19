@@ -19,6 +19,9 @@
     <!-- Accessibility service permission -->
     <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
 
+    <!-- Inject events permission -->
+    <uses-permission android:name="android.permission.INJECT_EVENTS" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

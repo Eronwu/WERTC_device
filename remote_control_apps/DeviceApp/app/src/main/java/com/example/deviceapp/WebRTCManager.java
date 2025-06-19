@@ -7,6 +7,8 @@ import org.webrtc.*;
 import org.java_websocket.WebSocket;
 import com.google.gson.JsonObject;
 import com.google.gson.Gson;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -23,6 +25,7 @@ public class WebRTCManager {
     private WebSocket webSocket;
     private Gson gson = new Gson();
     private ScreenCaptureService screenCaptureService;
+    private TouchControlService touchControlService;
     
     private static final String[] MANDATORY_FIELDS = {
         "OfferToReceiveAudio",
@@ -31,6 +34,7 @@ public class WebRTCManager {
     
     public WebRTCManager(Context context, ScreenCaptureService screenCaptureService) {
         this.screenCaptureService = screenCaptureService;
+        this.touchControlService = new TouchControlService();
         initializePeerConnectionFactory(context);
     }
     
@@ -80,6 +84,9 @@ public class WebRTCManager {
         DataChannel.Init dataChannelInit = new DataChannel.Init();
         dataChannelInit.ordered = true;
         dataChannel = peerConnection.createDataChannel("control", dataChannelInit);
+        
+        // Set up observer for the locally created data channel
+        setupDataChannelObserver(dataChannel);
         
         // Create video track from screen capture - only do this once during peer connection creation
         createVideoTrack();
@@ -433,9 +440,21 @@ public class WebRTCManager {
             
             @Override
             public void onMessage(DataChannel.Buffer buffer) {
-                // Handle control events received from client
-                Log.d(TAG, "Received data channel message");
-                // TODO: Parse and handle control events
+                try {
+                    // Convert ByteBuffer to String
+                    byte[] data = new byte[buffer.data.remaining()];
+                    buffer.data.get(data);
+                    String message = new String(data, StandardCharsets.UTF_8);
+                    
+                    Log.d(TAG, "Received data channel message: " + message);
+                    
+                    // Parse and handle control event
+                    ControlEvent event = gson.fromJson(message, ControlEvent.class);
+                    touchControlService.handleControlEvent(event);
+                    
+                } catch (Exception e) {
+                    Log.e(TAG, "Error handling data channel message", e);
+                }
             }
         });
     }

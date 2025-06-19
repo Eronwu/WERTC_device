@@ -19,6 +19,7 @@ class _ControlScreenState extends State<ControlScreen> {
   late WebSocketService _webSocketService;
   late WebRTCService _webRTCService;
   RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
+  final GlobalKey _videoKey = GlobalKey();
   
   bool _isConnected = false;
   bool _isConnecting = false;
@@ -121,23 +122,69 @@ class _ControlScreenState extends State<ControlScreen> {
   void _handleTap(TapUpDetails details) {
     if (!_isConnected) return;
 
-    final RenderBox renderBox = context.findRenderObject() as RenderBox;
-    final localPosition = renderBox.globalToLocal(details.globalPosition);
+    // Get the video widget's render box to convert coordinates
+    final RenderBox? videoRenderBox = _getVideoRenderBox();
+    if (videoRenderBox == null) return;
     
-    // Convert to device coordinates (assuming same aspect ratio for now)
-    final event = ControlEvent.click(localPosition.dx, localPosition.dy);
+    final localPosition = videoRenderBox.globalToLocal(details.globalPosition);
+    
+    // Map coordinates from video display size to device screen size
+    // Device screen: 1824x1080, Video display: actual widget size
+    final videoSize = videoRenderBox.size;
+    final deviceX = (localPosition.dx / videoSize.width) * 1824;
+    final deviceY = (localPosition.dy / videoSize.height) * 1080;
+    
+    final event = ControlEvent.click(deviceX, deviceY);
     _webRTCService.sendControlEvent(event);
+    debugPrint('Touch mapped: (${localPosition.dx}, ${localPosition.dy}) -> (${deviceX.toInt()}, ${deviceY.toInt()})');
   }
 
   void _handlePanUpdate(DragUpdateDetails details) {
     if (!_isConnected) return;
 
-    final RenderBox renderBox = context.findRenderObject() as RenderBox;
-    final localPosition = renderBox.globalToLocal(details.globalPosition);
+    // Get the video widget's render box to convert coordinates
+    final RenderBox? videoRenderBox = _getVideoRenderBox();
+    if (videoRenderBox == null) return;
+    
+    final localPosition = videoRenderBox.globalToLocal(details.globalPosition);
+    
+    // Map coordinates from video display size to device screen size
+    final videoSize = videoRenderBox.size;
+    final deviceX = (localPosition.dx / videoSize.width) * 1824;
+    final deviceY = (localPosition.dy / videoSize.height) * 1080;
     
     // For continuous movement, send as click events
-    final event = ControlEvent.click(localPosition.dx, localPosition.dy);
+    final event = ControlEvent.click(deviceX, deviceY);
     _webRTCService.sendControlEvent(event);
+  }
+  
+  void _handleLongPress() {
+    if (!_isConnected) return;
+
+    // For long press without specific coordinates, we'll use the center of the screen
+    // In a real implementation, you'd track the last touch position
+    const deviceX = 1824 / 2; // Center X
+    const deviceY = 1080 / 2; // Center Y
+    
+    // Send long click event (we'll handle this in the device)
+    final event = ControlEvent(
+      type: 'long_click',
+      x: deviceX,
+      y: deviceY,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+    );
+    _webRTCService.sendControlEvent(event);
+    debugPrint('Long press at: (${deviceX.toInt()}, ${deviceY.toInt()})');
+  }
+  
+  RenderBox? _getVideoRenderBox() {
+    // Find the RTCVideoView widget's render box using the global key
+    try {
+      return _videoKey.currentContext?.findRenderObject() as RenderBox?;
+    } catch (e) {
+      debugPrint('Error getting video render box: $e');
+      return null;
+    }
   }
 
   @override
@@ -156,8 +203,10 @@ class _ControlScreenState extends State<ControlScreen> {
                       ? GestureDetector(
                           onTapUp: _handleTap,
                           onPanUpdate: _handlePanUpdate,
+                          onLongPress: _handleLongPress,
                           child: RTCVideoView(
                             _remoteRenderer,
+                            key: _videoKey,
                             objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
                           ),
                         )

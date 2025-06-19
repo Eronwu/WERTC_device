@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../models/control_event.dart';
@@ -89,7 +90,18 @@ class WebRTCService {
       debugPrint('Signaling state: $state');
     };
     
-    debugPrint('WebRTC initialized');
+    // Create data channel for sending control events
+    _dataChannel = await _peerConnection!.createDataChannel(
+      'control',
+      RTCDataChannelInit()..ordered = true,
+    );
+    
+    // Monitor data channel state
+    _dataChannel!.onDataChannelState = (state) {
+      debugPrint('Data channel state: $state');
+    };
+    
+    debugPrint('WebRTC initialized with data channel: ${_dataChannel!.label}');
   }
   
   Future<void> requestConnection() async {
@@ -205,9 +217,10 @@ class WebRTCService {
   
   void sendControlEvent(ControlEvent event) {
     if (_dataChannel?.state == RTCDataChannelState.RTCDataChannelOpen) {
-      final jsonString = event.toJson().toString();
+      final jsonString = jsonEncode(event.toJson());
       _dataChannel!.send(RTCDataChannelMessage(jsonString));
-      debugPrint('Sent control event: ${event.type}');
+      debugPrint('Sent control event: ${event.type} at (${event.x}, ${event.y})');
+      debugPrint('JSON sent: $jsonString');
     } else {
       debugPrint('Data channel not open, cannot send control event');
     }
