@@ -3,7 +3,7 @@
 ## DeviceApp WebSocket API
 
 ### Connection
-- **URL**: `ws://<device_ip>:8080`
+- **URL**: `ws://<device_ip>:4321`
 - **Protocol**: WebSocket
 
 ### Message Format
