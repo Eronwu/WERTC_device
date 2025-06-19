@@ -38,7 +38,6 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -50,7 +49,6 @@ import android.os.HandlerThread;
 public class ScreenCaptureService extends Service {
     private static final String TAG = "ScreenCaptureService";
     private static final int FRAME_RATE = 30;
-    private static final int DEBUG_DURATION_MS = 20000; // 20 seconds for debug recording
     
     // WebRTC screen capture components
     private ScreenCapturerAndroid screenCapturer;
@@ -65,15 +63,7 @@ public class ScreenCaptureService extends Service {
     private int screenHeight;
     private int screenDensity;
     
-    // Debug recording components
-    private boolean isDebugRecording = false;
-    private MediaRecorder debugMediaRecorder;
-    private File debugOutputDir;
     private AtomicInteger frameCount = new AtomicInteger(0);
-    private ConcurrentLinkedQueue<String> debugFrameQueue = new ConcurrentLinkedQueue<>();
-    private Handler debugHandler;
-    private HandlerThread debugThread;
-    private long captureStartTime;
     
     // Capture state
     private boolean isCapturing = false;
@@ -87,7 +77,6 @@ public class ScreenCaptureService extends Service {
         
         initScreenMetrics();
         initWebRTCComponents();
-        initDebugComponents();
         
         // Set reference in WebSocketService
         WebSocketService webSocketService = WebSocketService.getInstance();
@@ -106,7 +95,6 @@ public class ScreenCaptureService extends Service {
             Log.d(TAG, "Screen capturer started: " + success);
             if (success) {
                 frameCount.set(0);
-                captureStartTime = System.currentTimeMillis();
             }
         }
         
@@ -119,15 +107,9 @@ public class ScreenCaptureService extends Service {
         @Override
         public void onFrameCaptured(VideoFrame frame) {
             int currentFrame = frameCount.incrementAndGet();
-            long currentTime = System.currentTimeMillis();
             
             Log.v(TAG, "Frame captured: " + currentFrame + ", timestamp: " + frame.getTimestampNs() + 
                       ", size: " + frame.getBuffer().getWidth() + "x" + frame.getBuffer().getHeight());
-            
-            // Save debug frame if within 10 seconds
-            if (currentTime - captureStartTime <= DEBUG_DURATION_MS) {
-                saveDebugFrame(frame, currentFrame);
-            }
             
             // Send frame to WebRTC VideoSource through CapturerObserver
             if (videoSource != null && videoSource.getCapturerObserver() != null) {
@@ -143,80 +125,7 @@ public class ScreenCaptureService extends Service {
         }
     }
     
-    private void startDebugRecording() {
-        debugHandler.post(() -> {
-            try {
-                // Create debug video file
-                String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-                    .format(new Date());
-                File debugVideoFile = new File(debugOutputDir, "screen_capture_" + timestamp + ".mp4");
-                
-                // Skip MediaRecorder debug recording to avoid conflicts with ScreenCapturerAndroid
-                // Instead, just log frame capture info which we already do in saveDebugFrame
-                Log.d(TAG, "Debug recording placeholder started: " + debugVideoFile.getAbsolutePath());
-                Log.d(TAG, "Note: MediaRecorder disabled to avoid conflicts with WebRTC screen capture");
-                
-                // Stop debug logging after the specified duration
-                debugHandler.postDelayed(() -> {
-                    Log.d(TAG, "Debug recording period ended");
-                    // Save final debug frame info
-                    if (!debugFrameQueue.isEmpty()) {
-                        saveDebugFrameInfo();
-                    }
-                }, DEBUG_DURATION_MS);
-                
-            } catch (Exception e) {
-                Log.e(TAG, "Error in debug recording", e);
-            }
-        });
-    }
-    
-    private void saveDebugFrame(VideoFrame frame, int frameNumber) {
-        debugHandler.post(() -> {
-            try {
-                // Add frame info to debug queue
-                String frameInfo = String.format(Locale.getDefault(),
-                    "Frame %d: %dx%d, timestamp=%d, rotation=%d",
-                    frameNumber,
-                    frame.getBuffer().getWidth(),
-                    frame.getBuffer().getHeight(),
-                    frame.getTimestampNs(),
-                    frame.getRotation());
-                
-                debugFrameQueue.offer(frameInfo);
-                
-                // Keep only recent frames
-                while (debugFrameQueue.size() > 300) { // ~10 seconds at 30fps
-                    debugFrameQueue.poll();
-                }
-                
-                // Save frame info to file every 30 frames
-                if (frameNumber % 30 == 0) {
-                    saveDebugFrameInfo();
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Error saving debug frame info", e);
-            }
-        });
-    }
-    
-    private void saveDebugFrameInfo() {
-        try {
-            String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-                .format(new Date());
-            File debugFile = new File(debugOutputDir, "frame_info_" + timestamp + ".txt");
-            
-            try (FileOutputStream fos = new FileOutputStream(debugFile)) {
-                for (String frameInfo : debugFrameQueue) {
-                    fos.write((frameInfo + "\n").getBytes());
-                }
-            }
-            
-            Log.d(TAG, "Debug frame info saved: " + debugFile.getAbsolutePath());
-        } catch (Exception e) {
-            Log.e(TAG, "Error saving debug frame info to file", e);
-        }
-    }
+
     
     private static final String NOTIFICATION_CHANNEL_ID = "ScreenCaptureServiceChannel";
     private static final int NOTIFICATION_ID = 1;
@@ -295,16 +204,7 @@ public class ScreenCaptureService extends Service {
             captureHandler = null;
         }
         
-        if (debugThread != null) {
-            debugThread.quitSafely();
-            try {
-                debugThread.join(1000);
-            } catch (InterruptedException e) {
-                Log.w(TAG, "Interrupted while waiting for debug thread to finish");
-            }
-            debugThread = null;
-            debugHandler = null;
-        }
+
         
         if (eglBase != null) {
             eglBase.release();
@@ -351,24 +251,7 @@ private void initWebRTCComponents() {
         }
     }
     
-    private void initDebugComponents() {
-        try {
-            // Create debug output directory
-            debugOutputDir = new File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "ScreenCaptureDebug");
-            if (!debugOutputDir.exists()) {
-                debugOutputDir.mkdirs();
-            }
-            
-            // Create debug thread
-            debugThread = new HandlerThread("DebugThread");
-            debugThread.start();
-            debugHandler = new Handler(debugThread.getLooper());
-            
-            Log.d(TAG, "Debug components initialized, output dir: " + debugOutputDir.getAbsolutePath());
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to initialize debug components", e);
-        }
-    }
+
     
     private void startScreenCapture(int resultCode, Intent data) {
         try {
@@ -420,9 +303,6 @@ private void initWebRTCComponents() {
                         // Start capturing
                         screenCapturer.startCapture(screenWidth, screenHeight, FRAME_RATE);
                         isCapturing = true;
-                        
-                        // Start debug recording after WebRTC capture is started
-                        startDebugRecording();
                         
                         Log.d(TAG, "WebRTC screen capture started successfully");
                     } else {
@@ -496,20 +376,7 @@ private void initWebRTCComponents() {
                 });
             }
             
-            // Stop debug recording
-            if (debugHandler != null) {
-                debugHandler.post(() -> {
-                    try {
-                        // Save final debug frame info
-                        if (!debugFrameQueue.isEmpty()) {
-                            saveDebugFrameInfo();
-                        }
-                        Log.d(TAG, "Debug frame logging stopped");
-                    } catch (Exception e) {
-                        Log.e(TAG, "Error stopping debug recording", e);
-                    }
-                });
-            }
+
             
             Log.d(TAG, "WebRTC screen capture stopped successfully");
         } catch (Exception e) {
