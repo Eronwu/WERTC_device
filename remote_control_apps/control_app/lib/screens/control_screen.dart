@@ -24,7 +24,7 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
   
   bool _isConnected = false;
   bool _isConnecting = false;
-  String _connectionStatus = 'Disconnected';
+  String _connectionStatus = 'Disconnected'; // Used in UI display
   
   // Gesture tracking for swipe detection
   Offset? _panStartPosition;
@@ -105,7 +105,7 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
       });
     });
     
-    // Listen for connection status changes
+    // Listen for connection status changes (for UI updates only)
     _webSocketService.connectionStream.listen((connected) {
       setState(() {
         _isConnected = connected;
@@ -113,10 +113,7 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
           (_webSocketService.isReconnecting ? 'Reconnecting...' : 'Disconnected');
       });
       
-      if (connected) {
-        // Reinitialize WebRTC when reconnected
-        _reinitializeWebRTC();
-      }
+      // Don't automatically reinitialize WebRTC here - it's handled in _connectToDevice
     });
   }
 
@@ -195,24 +192,24 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
 
   Future<void> _reinitializeWebRTC() async {
     try {
-      debugPrint('Reinitializing WebRTC...');
+      debugPrint('Fast WebRTC reinit...');
       
-      // Properly dispose and recreate the video renderer
-      await _recreateVideoRenderer();
-      
-      // Clean up current WebRTC connection
+      // Clean up current WebRTC connection first
       _webRTCService.cleanupConnection();
       
-      // Wait a moment for cleanup to complete
-      await Future.delayed(const Duration(milliseconds: 500));
+      // Recreate video renderer in parallel with WebRTC init
+      final rendererFuture = _recreateVideoRenderer();
+      final webrtcFuture = _webRTCService.initialize();
       
-      // Initialize and request connection
-      await _webRTCService.initialize();
+      // Wait for both to complete
+      await Future.wait([rendererFuture, webrtcFuture]);
+      
+      // Request connection
       await _webRTCService.requestConnection();
       
-      debugPrint('WebRTC reinitialization complete');
+      debugPrint('Fast WebRTC reinit complete');
     } catch (e) {
-      debugPrint('Error reinitializing WebRTC: $e');
+      debugPrint('Error in fast WebRTC reinit: $e');
     }
   }
 
@@ -238,13 +235,14 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
         _remoteRenderer.srcObject = null;
       });
       
+      // Dispose old renderer
       await _remoteRenderer.dispose();
       
-      // Create new renderer instance
+      // Create new renderer instance without delay
       _remoteRenderer = RTCVideoRenderer();
       await _remoteRenderer.initialize();
       
-      debugPrint('Video renderer recreated successfully');
+      debugPrint('Video renderer recreated');
     } catch (e) {
       debugPrint('Error recreating video renderer: $e');
     }

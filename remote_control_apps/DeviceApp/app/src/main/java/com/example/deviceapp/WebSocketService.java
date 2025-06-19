@@ -222,7 +222,7 @@ public class WebSocketService extends Service {
     }
     
     private void handleStartWebRTC(WebSocket conn, JsonObject json) {
-        Log.d(TAG, "Handling start WebRTC request");
+        Log.d(TAG, "Fast WebRTC initialization starting");
         
         if (screenCaptureService == null) {
             Log.e(TAG, "ScreenCaptureService not available");
@@ -232,19 +232,20 @@ public class WebSocketService extends Service {
         // Clean up any existing WebRTC manager for this connection only if it's a reconnection
         WebRTCManager existingManager = webRTCManagers.get(conn);
         if (existingManager != null) {
-            Log.d(TAG, "Cleaning up existing WebRTC manager for reconnection");
+            Log.d(TAG, "Cleaning up existing WebRTC manager for fast reconnection");
             existingManager.cleanup();
             webRTCManagers.remove(conn);
         }
         
-        // Create fresh WebRTC manager for this connection
+        // Create and initialize WebRTC manager in optimized sequence
         WebRTCManager webRTCManager = new WebRTCManager(this, screenCaptureService);
-        webRTCManager.createPeerConnection(conn);
         webRTCManagers.put(conn, webRTCManager);
         
-        // Create and send offer to client (device initiates with video track)
+        // Create peer connection and offer in single operation
+        webRTCManager.createPeerConnection(conn);
         webRTCManager.createOfferWithVideo();
-        Log.d(TAG, "Created and sent fresh WebRTC offer with video to client");
+        
+        Log.d(TAG, "Fast WebRTC initialization completed - offer sent");
     }
     
     private void handleOffer(WebSocket conn, JsonObject json) {

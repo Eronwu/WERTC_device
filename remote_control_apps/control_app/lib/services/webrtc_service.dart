@@ -21,11 +21,9 @@ class WebRTCService {
   }
   
   Future<void> initialize() async {
-    // Create peer connection
+    // Create peer connection - removed STUN for local network optimization
     final configuration = {
-      'iceServers': [
-        {'urls': 'stun:stun.l.google.com:19302'},
-      ],
+      'iceServers': [], // Empty for local network only
     };
     
     _peerConnection = await createPeerConnection(configuration);
@@ -101,7 +99,7 @@ class WebRTCService {
       debugPrint('Data channel state: $state');
     };
     
-    debugPrint('WebRTC initialized with data channel: ${_dataChannel!.label}');
+    debugPrint('WebRTC initialized');
   }
   
   Future<void> requestConnection() async {

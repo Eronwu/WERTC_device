@@ -61,11 +61,10 @@ class WebSocketService {
         },
       );
       
-      // Wait a moment to ensure connection is established
-      await Future.delayed(const Duration(milliseconds: 500));
+      // Minimal delay for connection establishment
+      await Future.delayed(const Duration(milliseconds: 50));
       
-      // Send ping to ensure connection is working
-      sendMessage({'type': 'ping'});
+      // Connection ready immediately
       
       _connectionController.add(true);
       _isReconnecting = false;

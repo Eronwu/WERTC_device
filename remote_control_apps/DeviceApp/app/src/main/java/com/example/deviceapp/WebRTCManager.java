@@ -42,9 +42,10 @@ public class WebRTCManager {
     }
     
     private void initializePeerConnectionFactory(Context context) {
+        // Fast initialization - disable internal tracer for performance
         PeerConnectionFactory.InitializationOptions initializationOptions =
                 PeerConnectionFactory.InitializationOptions.builder(context)
-                        .setEnableInternalTracer(true)
+                        .setEnableInternalTracer(false)  // Disable for faster startup
                         .createInitializationOptions();
         PeerConnectionFactory.initialize(initializationOptions);
         
@@ -66,28 +67,27 @@ public class WebRTCManager {
                 .setVideoDecoderFactory(decoderFactory)
                 .createPeerConnectionFactory();
         
-        Log.d(TAG, "PeerConnectionFactory initialized with complete codec support");
+        Log.d(TAG, "PeerConnectionFactory initialized with fast config");
     }
     
     public void createPeerConnection(WebSocket webSocket) {
         this.webSocket = webSocket;
         
+        // Empty ICE servers for local network optimization
         List<PeerConnection.IceServer> iceServers = new ArrayList<>();
-        // 注释或删除STUN服务器配置
-//        iceServers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer());
         
         PeerConnection.RTCConfiguration rtcConfig = new PeerConnection.RTCConfiguration(iceServers);
         rtcConfig.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED;
         rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
         rtcConfig.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE;
-        rtcConfig.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY;
+        rtcConfig.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE; // Fast gathering
         
-        // Low latency optimizations
-//         rtcConfig.iceConnectionReceivingTimeout = 1000; // 1 second timeout
+        // Aggressive low latency optimizations
+        rtcConfig.iceConnectionReceivingTimeout = 1000; // 1 second timeout
         rtcConfig.keyType = PeerConnection.KeyType.ECDSA; // Faster key exchange
-        rtcConfig.iceCandidatePoolSize = 0; // 不预收集候选，节省资源
-        rtcConfig.iceTransportsType = PeerConnection.IceTransportsType.ALL; // 改为HOST以仅使用本地候选
-        rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.PLAN_B; // 统一计划（Unified Plan）是现代标准，但对于本地通信，Plan B 可能更简单
+        rtcConfig.iceCandidatePoolSize = 0; // No pre-gathering for faster start
+        rtcConfig.iceTransportsType = PeerConnection.IceTransportsType.ALL;
+        rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN; // Modern standard
 
         peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, new PeerConnectionObserver());
         
@@ -158,6 +158,8 @@ public class WebRTCManager {
     }
     
     public void createOfferWithVideo() {
+        Log.d(TAG, "Creating offer - fast mode");
+        
         // Create offer with explicit send-only constraints for screen sharing
         MediaConstraints constraints = new MediaConstraints();
         // Explicitly disable receiving for send-only screen share
@@ -171,9 +173,13 @@ public class WebRTCManager {
                 // Only show in debug mode
 //                Log.d(TAG, "Original Offer SDP: " + sessionDescription.description);
 
-                // Fix SDP to use sendonly for video (screen sharing sender)
-                // if device can set VP8 over VP9 for lower latency, it will be good. but set VP8 is not work.
-                String modifiedSdp = sessionDescription.description.replace("a=sendrecv", "a=sendonly");
+                // Optimize SDP for low latency screen sharing
+                String modifiedSdp = sessionDescription.description
+                    .replace("a=sendrecv", "a=sendonly")
+                        // if device can set VP8 over VP9 for lower latency, it will be good. but set VP8 is not work.
+                    // Force specific video parameters for performance
+                    .replace("a=fmtp:96", "a=fmtp:96 max-fr=30;max-fs=8160"); // Limit frame size
+                    
                 SessionDescription fixedSessionDescription = new SessionDescription(
                     sessionDescription.type, modifiedSdp);
 
