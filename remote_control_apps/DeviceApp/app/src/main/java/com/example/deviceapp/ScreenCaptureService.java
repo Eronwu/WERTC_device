@@ -107,15 +107,16 @@ public class ScreenCaptureService extends Service {
         @Override
         public void onFrameCaptured(VideoFrame frame) {
             int currentFrame = frameCount.incrementAndGet();
-            
-            Log.v(TAG, "Frame captured: " + currentFrame + ", timestamp: " + frame.getTimestampNs() + 
-                      ", size: " + frame.getBuffer().getWidth() + "x" + frame.getBuffer().getHeight());
+
+            // Only for debug log
+//            Log.d(TAG, "Frame captured: " + currentFrame + ", timestamp: " + frame.getTimestampNs() +
+//                      ", size: " + frame.getBuffer().getWidth() + "x" + frame.getBuffer().getHeight());
             
             // Send frame to WebRTC VideoSource through CapturerObserver
             if (videoSource != null && videoSource.getCapturerObserver() != null) {
                 try {
                     videoSource.getCapturerObserver().onFrameCaptured(frame);
-                    Log.v(TAG, "Frame sent to WebRTC VideoSource successfully");
+//                    Log.v(TAG, "Frame sent to WebRTC VideoSource successfully");
                 } catch (Exception e) {
                     Log.e(TAG, "Error sending frame to VideoSource", e);
                 }
@@ -320,14 +321,14 @@ private void initWebRTCComponents() {
     
     // WebRTC VideoSource setter - called by WebRTCManager
     public void setVideoSource(VideoSource videoSource) {
-        // Prevent setting VideoSource multiple times to avoid duplicate capture attempts
+        // Allow resetting VideoSource for reconnection scenarios
         if (this.videoSource != null) {
-            Log.w(TAG, "VideoSource already set, ignoring duplicate setVideoSource call");
-            return;
+            Log.d(TAG, "VideoSource already set, updating with new VideoSource for reconnection");
+        } else {
+            Log.d(TAG, "Setting VideoSource for screen capture");
         }
         
         this.videoSource = videoSource;
-        Log.d(TAG, "VideoSource set for screen capture");
         
         // If we have pending capture request and now have VideoSource, start capture
         if (mediaProjectionResultCode != 0 && mediaProjectionData != null && !isCapturing) {

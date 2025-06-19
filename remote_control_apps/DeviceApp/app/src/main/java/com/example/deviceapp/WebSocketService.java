@@ -89,17 +89,25 @@ public class WebSocketService extends Service {
                     deviceInfo.addProperty("type", "device_info");
                     deviceInfo.addProperty("device_name", android.os.Build.MODEL);
                     deviceInfo.addProperty("device_id", android.os.Build.SERIAL);
-                    conn.send(gson.toJson(deviceInfo));
+                    
+                    try {
+                        conn.send(gson.toJson(deviceInfo));
+                        Log.d(TAG, "Sent initial device info to new client");
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error sending initial device info", e);
+                    }
                 }
             
                 @Override
                 public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-                    Log.d(TAG, "Client disconnected: " + conn.getRemoteSocketAddress());
+                    Log.d(TAG, "Client disconnected: " + conn.getRemoteSocketAddress() + 
+                          ", code: " + code + ", reason: " + reason + ", remote: " + remote);
                     clients.remove(conn);
 
-                    // Clean up WebRTC connection
+                    // Clean up WebRTC connection but keep reference for potential reconnection
                     WebRTCManager webRTCManager = webRTCManagers.remove(conn);
                     if (webRTCManager != null) {
+                        Log.d(TAG, "Cleaning up WebRTC for disconnected client");
                         webRTCManager.cleanup();
                     }
                 }
@@ -195,13 +203,22 @@ public class WebSocketService extends Service {
         // Handle ping request and respond with device info
         Log.d(TAG, "Handling ping request");
         
-        JsonObject deviceInfo = new JsonObject();
-        deviceInfo.addProperty("type", "device_info");
-        deviceInfo.addProperty("device_name", android.os.Build.MODEL);
-        deviceInfo.addProperty("device_id", android.os.Build.SERIAL);
-        
-        conn.send(gson.toJson(deviceInfo));
-        Log.d(TAG, "Sent device info response");
+        // Check if connection is still open before sending response
+        if (conn.isOpen()) {
+            JsonObject deviceInfo = new JsonObject();
+            deviceInfo.addProperty("type", "device_info");
+            deviceInfo.addProperty("device_name", android.os.Build.MODEL);
+            deviceInfo.addProperty("device_id", android.os.Build.SERIAL);
+            
+            try {
+                conn.send(gson.toJson(deviceInfo));
+                Log.d(TAG, "Sent device info response");
+            } catch (Exception e) {
+                Log.e(TAG, "Error sending device info response", e);
+            }
+        } else {
+            Log.w(TAG, "Cannot send ping response - connection is closed");
+        }
     }
     
     private void handleStartWebRTC(WebSocket conn, JsonObject json) {
@@ -212,17 +229,22 @@ public class WebSocketService extends Service {
             return;
         }
         
-        // Create WebRTC manager for this connection if not exists
-        WebRTCManager webRTCManager = webRTCManagers.get(conn);
-        if (webRTCManager == null) {
-            webRTCManager = new WebRTCManager(this, screenCaptureService);
-            webRTCManager.createPeerConnection(conn);
-            webRTCManagers.put(conn, webRTCManager);
+        // Clean up any existing WebRTC manager for this connection only if it's a reconnection
+        WebRTCManager existingManager = webRTCManagers.get(conn);
+        if (existingManager != null) {
+            Log.d(TAG, "Cleaning up existing WebRTC manager for reconnection");
+            existingManager.cleanup();
+            webRTCManagers.remove(conn);
         }
+        
+        // Create fresh WebRTC manager for this connection
+        WebRTCManager webRTCManager = new WebRTCManager(this, screenCaptureService);
+        webRTCManager.createPeerConnection(conn);
+        webRTCManagers.put(conn, webRTCManager);
         
         // Create and send offer to client (device initiates with video track)
         webRTCManager.createOfferWithVideo();
-        Log.d(TAG, "Created and sent WebRTC offer with video to client");
+        Log.d(TAG, "Created and sent fresh WebRTC offer with video to client");
     }
     
     private void handleOffer(WebSocket conn, JsonObject json) {

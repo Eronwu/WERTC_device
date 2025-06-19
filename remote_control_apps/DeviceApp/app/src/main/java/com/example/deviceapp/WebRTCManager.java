@@ -152,14 +152,16 @@ public class WebRTCManager {
             @Override
             public void onCreateSuccess(SessionDescription sessionDescription) {
                 Log.d(TAG, "Offer created successfully");
-                Log.v(TAG, "Original Offer SDP: " + sessionDescription.description);
+                // Only show in debug mode
+//                Log.d(TAG, "Original Offer SDP: " + sessionDescription.description);
                 
                 // Fix SDP to use sendonly for video (screen sharing sender)
                 String modifiedSdp = sessionDescription.description.replace("a=sendrecv", "a=sendonly");
                 SessionDescription fixedSessionDescription = new SessionDescription(
                     sessionDescription.type, modifiedSdp);
-                
-                Log.v(TAG, "Modified Offer SDP: " + fixedSessionDescription.description);
+
+                // Only show in debug mode
+//                Log.v(TAG, "Modified Offer SDP: " + fixedSessionDescription.description);
                 
                 peerConnection.setLocalDescription(new SdpObserver() {
                     @Override

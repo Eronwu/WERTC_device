@@ -26,6 +26,16 @@ class WebSocketService {
       _lastDevice = device;
       _cancelReconnectTimer();
       
+      // Clean up any existing connection
+      if (_channel != null) {
+        try {
+          _channel!.sink.close();
+        } catch (e) {
+          debugPrint('Error closing existing connection: $e');
+        }
+        _channel = null;
+      }
+      
       final uri = Uri.parse('ws://${device.ipAddress}:${device.port}');
       debugPrint('Connecting to: $uri');
       
@@ -53,6 +63,9 @@ class WebSocketService {
       
       // Wait a moment to ensure connection is established
       await Future.delayed(const Duration(milliseconds: 500));
+      
+      // Send ping to ensure connection is working
+      sendMessage({'type': 'ping'});
       
       _connectionController.add(true);
       _isReconnecting = false;
@@ -144,8 +157,12 @@ class WebSocketService {
   void dispose() {
     _cancelReconnectTimer();
     disconnect();
-    _messageController.close();
-    _connectionController.close();
+    if (!_messageController.isClosed) {
+      _messageController.close();
+    }
+    if (!_connectionController.isClosed) {
+      _connectionController.close();
+    }
   }
 }
 

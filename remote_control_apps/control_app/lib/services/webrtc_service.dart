@@ -177,8 +177,8 @@ class WebRTCService {
     debugPrint('Creating answer');
     final answer = await _peerConnection!.createAnswer(constraints);
     
-    // The answer should automatically be recvonly to match the sendonly offer
-    debugPrint('Answer SDP: ${answer.sdp}');
+    // The answer should automatically be recvonly to match the sendonly offer; only for debug msg
+    // debugPrint('Answer SDP: ${answer.sdp}');
     
     await _peerConnection!.setLocalDescription(answer);
     
@@ -227,14 +227,32 @@ class WebRTCService {
   }
   
   void cleanupConnection() {
+    debugPrint('Cleaning up WebRTC connection...');
     _dataChannel?.close();
     _dataChannel = null;
     _peerConnection?.close();
     _peerConnection = null;
     _remoteStream = null;
+    _disposed = false; // Reset disposed flag for reuse
+    debugPrint('WebRTC connection cleanup completed');
   }
 
+  bool get isConnected {
+    return _peerConnection != null && 
+           _dataChannel != null && 
+           _dataChannel!.state == RTCDataChannelState.RTCDataChannelOpen;
+  }
+
+  bool get hasVideoStream {
+    return _remoteStream != null && _remoteStream!.getVideoTracks().isNotEmpty;
+  }
+
+  bool _disposed = false;
+  
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    
     cleanupConnection();
     if (!_remoteStreamController.isClosed) {
       _remoteStreamController.close();

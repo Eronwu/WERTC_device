@@ -72,16 +72,15 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
     
     switch (state) {
       case AppLifecycleState.paused:
-        debugPrint('App paused - maintaining connection');
+        debugPrint('App paused - clearing video renderer');
+        // Clear video stream to prevent rendering issues
+        setState(() {
+          _remoteRenderer.srcObject = null;
+        });
         break;
       case AppLifecycleState.resumed:
-        debugPrint('App resumed - checking connection and reinitializing WebRTC');
-        await _checkAndReconnect();
-        // Give some time for WebSocket reconnection, then reinitialize WebRTC
-        if (_isConnected) {
-          await Future.delayed(const Duration(milliseconds: 1000));
-          await _reinitializeWebRTC();
-        }
+        debugPrint('App resumed - performing full reconnection');
+        await _handleAppResume();
         break;
       case AppLifecycleState.detached:
         debugPrint('App detached - cleaning up');
@@ -121,13 +120,24 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
     });
   }
 
-  Future<void> _connectToDevice() async {
+  Future<void> _connectToDevice({bool isReconnection = false}) async {
     setState(() {
       _isConnecting = true;
       _connectionStatus = 'Connecting...';
     });
 
     try {
+      // Only recreate services if this is a reconnection
+      if (isReconnection) {
+        // Ensure clean state before reconnecting
+        await _recreateVideoRenderer();
+        
+        // Reinitialize services
+        _webSocketService.dispose();
+        _webRTCService.dispose();
+        _initializeServices();
+      }
+
       // Connect WebSocket
       final connected = await _webSocketService.connect(widget.device);
       if (!connected) {
@@ -160,9 +170,13 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
     }
   }
 
-  void _disconnect() {
+  Future<void> _disconnect() async {
+    // Clean up connections
     _webRTCService.dispose();
     _webSocketService.disconnect();
+    
+    // Recreate video renderer for clean state
+    await _recreateVideoRenderer();
     
     setState(() {
       _isConnected = false;
@@ -175,7 +189,7 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
   Future<void> _checkAndReconnect() async {
     if (!_isConnected && !_isConnecting) {
       debugPrint('Connection lost, attempting to reconnect...');
-      await _connectToDevice();
+      await _connectToDevice(isReconnection: true);
     }
   }
 
@@ -183,10 +197,8 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
     try {
       debugPrint('Reinitializing WebRTC...');
       
-      // Clear current video stream
-      setState(() {
-        _remoteRenderer.srcObject = null;
-      });
+      // Properly dispose and recreate the video renderer
+      await _recreateVideoRenderer();
       
       // Clean up current WebRTC connection
       _webRTCService.cleanupConnection();
@@ -204,8 +216,45 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
     }
   }
 
+  Future<void> _handleAppResume() async {
+    try {
+      debugPrint('Handling app resume - performing complete reconnection');
+      
+      // Use full reconnection logic which handles everything
+      await _connectToDevice(isReconnection: true);
+      
+      debugPrint('App resume reconnection completed successfully');
+    } catch (e) {
+      debugPrint('Error during app resume reconnection: $e');
+    }
+  }
+
+  Future<void> _recreateVideoRenderer() async {
+    try {
+      debugPrint('Recreating video renderer...');
+      
+      // Clear current stream and dispose renderer
+      setState(() {
+        _remoteRenderer.srcObject = null;
+      });
+      
+      await _remoteRenderer.dispose();
+      
+      // Create new renderer instance
+      _remoteRenderer = RTCVideoRenderer();
+      await _remoteRenderer.initialize();
+      
+      debugPrint('Video renderer recreated successfully');
+    } catch (e) {
+      debugPrint('Error recreating video renderer: $e');
+    }
+  }
+
   void _handleTap(TapUpDetails details) {
-    if (!_isConnected) return;
+    if (!_isConnected || !_webRTCService.isConnected) {
+      debugPrint('Cannot handle tap - not connected');
+      return;
+    }
 
     // Get the video widget's render box to convert coordinates
     final RenderBox? videoRenderBox = _getVideoRenderBox();
@@ -225,7 +274,7 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
   }
 
   void _handlePanStart(DragStartDetails details) {
-    if (!_isConnected) return;
+    if (!_isConnected || !_webRTCService.isConnected) return;
     
     final RenderBox? videoRenderBox = _getVideoRenderBox();
     if (videoRenderBox == null) return;
@@ -237,7 +286,7 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
   }
 
   void _handlePanUpdate(DragUpdateDetails details) {
-    if (!_isConnected || !_isPanning) return;
+    if (!_isConnected || !_webRTCService.isConnected || !_isPanning) return;
     
     final RenderBox? videoRenderBox = _getVideoRenderBox();
     if (videoRenderBox == null) return;
@@ -246,7 +295,7 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
   }
 
   void _handlePanEnd(DragEndDetails details) {
-    if (!_isConnected || !_isPanning || _panStartPosition == null || _panEndPosition == null) return;
+    if (!_isConnected || !_webRTCService.isConnected || !_isPanning || _panStartPosition == null || _panEndPosition == null) return;
 
     // Get the video widget's render box to convert coordinates
     final RenderBox? videoRenderBox = _getVideoRenderBox();
@@ -285,7 +334,7 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
   }
   
   void _handleLongPress() {
-    if (!_isConnected) return;
+    if (!_isConnected || !_webRTCService.isConnected) return;
 
     // For long press without specific coordinates, we'll use the center of the screen
     // In a real implementation, you'd track the last touch position
@@ -473,7 +522,7 @@ class _ControlScreenState extends State<ControlScreen> with WidgetsBindingObserv
                     Padding(
                       padding: const EdgeInsets.all(8),
                       child: ElevatedButton(
-                        onPressed: _disconnect,
+                        onPressed: () async => await _disconnect(),
                         style: ElevatedButton.styleFrom(
                           minimumSize: const Size(80, 40),
                           backgroundColor: Colors.red[700],
