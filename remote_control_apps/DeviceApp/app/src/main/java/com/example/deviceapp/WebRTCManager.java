@@ -9,6 +9,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.Gson;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class WebRTCManager {
@@ -70,19 +71,38 @@ public class WebRTCManager {
     }
     
     private void createVideoTrack() {
-        // Create video source from screen capture
-        videoSource = peerConnectionFactory.createVideoSource(false);
-        videoTrack = peerConnectionFactory.createVideoTrack("video_track", videoSource);
-        
-        // Add video track to peer connection
-        peerConnection.addTrack(videoTrack, List.of("stream_id"));
-        
-        // Connect screen capture service to video source
-        screenCaptureService.setVideoSource(videoSource);
+        try {
+            // Create video source from screen capture
+            videoSource = peerConnectionFactory.createVideoSource(false);
+            videoTrack = peerConnectionFactory.createVideoTrack("video_track", videoSource);
+            
+            // Use modern addTrack API instead of deprecated addStream
+            // Create stream labels list for track association
+            List<String> streamLabels = Arrays.asList("local_stream");
+            
+            // Add track to peer connection with stream labels
+            RtpSender sender = peerConnection.addTrack(videoTrack, streamLabels);
+            
+            if (sender != null) {
+                Log.d(TAG, "Video track added successfully via addTrack, sender: " + sender.id());
+            } else {
+                Log.e(TAG, "Failed to add video track - sender is null");
+            }
+            
+            // Connect screen capture service to video source
+            screenCaptureService.setVideoSource(videoSource);
+            
+            Log.d(TAG, "Video track created and added to peer connection using addTrack API");
+        } catch (Exception e) {
+            Log.e(TAG, "Error creating video track", e);
+        }
     }
     
     public void handleOffer(JsonObject offerJson) {
         try {
+            // Create video track before handling offer
+            createVideoTrack();
+            
             String sdpString = offerJson.get("sdp").getAsString();
             String type = "offer";
             

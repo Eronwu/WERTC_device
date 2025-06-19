@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
             return;
         }
         
-        // 检查网络权限（如果需要）
+        // TODO: 检查网络权限（Need to delete it.）
         String[] permissions = {
             Manifest.permission.INTERNET,
             Manifest.permission.ACCESS_NETWORK_STATE

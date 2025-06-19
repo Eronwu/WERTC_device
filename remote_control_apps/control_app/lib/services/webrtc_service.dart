@@ -40,9 +40,22 @@ class WebRTCService {
     
     // Handle remote stream
     _peerConnection!.onAddStream = (MediaStream stream) {
-      debugPrint('Received remote stream');
+      debugPrint('Remote stream added with ${stream.getVideoTracks().length} video tracks');
       _remoteStream = stream;
       _remoteStreamController.add(stream);
+    };
+    
+    _peerConnection!.onRemoveStream = (stream) {
+      debugPrint('Remote stream removed');
+      _remoteStream = null;
+    };
+    
+    _peerConnection!.onTrack = (event) {
+      debugPrint('Remote track added: ${event.track.kind}');
+      if (event.streams.isNotEmpty) {
+        _remoteStream = event.streams[0];
+        _remoteStreamController.add(event.streams[0]);
+      }
     };
     
     // Handle data channel
@@ -63,6 +76,7 @@ class WebRTCService {
   Future<void> createOffer() async {
     if (_peerConnection == null) return;
     
+    // Create offer with video constraints
     final constraints = {
       'offerToReceiveAudio': false,
       'offerToReceiveVideo': true,

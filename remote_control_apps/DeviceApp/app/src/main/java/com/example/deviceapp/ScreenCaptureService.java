@@ -16,44 +16,78 @@ import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
 import android.view.WindowManager;
+import android.os.Environment;
+import android.media.MediaRecorder;
+import android.media.MediaMuxer;
 
 import org.webrtc.VideoSource;
 import org.webrtc.VideoFrame;
 import org.webrtc.JavaI420Buffer;
 import org.webrtc.VideoFrame.I420Buffer;
+import org.webrtc.ScreenCapturerAndroid;
+import org.webrtc.VideoCapturer;
+import org.webrtc.SurfaceTextureHelper;
+import org.webrtc.EglBase;
+import org.webrtc.CapturerObserver;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.os.Build;
+import android.os.Handler;
+import android.os.HandlerThread;
 
 public class ScreenCaptureService extends Service {
     private static final String TAG = "ScreenCaptureService";
-    private static final String MIME_TYPE = "video/avc"; // H.264
     private static final int FRAME_RATE = 30;
-    private static final int I_FRAME_INTERVAL = 1;
-    private static final int BIT_RATE = 2000000; // 2Mbps
+    private static final int DEBUG_DURATION_MS = 10000; // 10 seconds for debug recording
     
-    private MediaProjection mediaProjection;
-    private VirtualDisplay virtualDisplay;
-    private MediaCodec encoder;
-    private Surface inputSurface;
-    private boolean isCapturing = false;
+    // WebRTC screen capture components
+    private ScreenCapturerAndroid screenCapturer;
+    private SurfaceTextureHelper surfaceTextureHelper;
+    private EglBase eglBase;
     private VideoSource videoSource;
-    private long frameTimestamp = 0;
+    private HandlerThread captureThread;
+    private Handler captureHandler;
     
+    // Screen metrics
     private int screenWidth;
     private int screenHeight;
     private int screenDensity;
+    
+    // Debug recording components
+    private boolean isDebugRecording = false;
+    private MediaRecorder debugMediaRecorder;
+    private File debugOutputDir;
+    private AtomicInteger frameCount = new AtomicInteger(0);
+    private ConcurrentLinkedQueue<String> debugFrameQueue = new ConcurrentLinkedQueue<>();
+    private Handler debugHandler;
+    private HandlerThread debugThread;
+    private long captureStartTime;
+    
+    // Capture state
+    private boolean isCapturing = false;
+    private Intent mediaProjectionData;
+    private int mediaProjectionResultCode;
     
     @Override
     public void onCreate() {
         super.onCreate();
         Log.d(TAG, "ScreenCaptureService created");
+        
         initScreenMetrics();
+        initWebRTCComponents();
+        initDebugComponents();
         
         // Set reference in WebSocketService
         WebSocketService webSocketService = WebSocketService.getInstance();
@@ -62,6 +96,144 @@ public class ScreenCaptureService extends Service {
             Log.d(TAG, "Set ScreenCaptureService reference in WebSocketService");
         } else {
             Log.w(TAG, "WebSocketService instance not available yet");
+        }
+    }
+    
+    // WebRTC CapturerObserver implementation
+    private class ScreenCaptureObserver implements CapturerObserver {
+        @Override
+        public void onCapturerStarted(boolean success) {
+            Log.d(TAG, "Screen capturer started: " + success);
+            if (success) {
+                frameCount.set(0);
+                captureStartTime = System.currentTimeMillis();
+            }
+        }
+        
+        @Override
+        public void onCapturerStopped() {
+            Log.d(TAG, "Screen capturer stopped");
+            isCapturing = false;
+        }
+        
+        @Override
+        public void onFrameCaptured(VideoFrame frame) {
+            int currentFrame = frameCount.incrementAndGet();
+            long currentTime = System.currentTimeMillis();
+            
+            Log.v(TAG, "Frame captured: " + currentFrame + ", timestamp: " + frame.getTimestampNs() + 
+                      ", size: " + frame.getBuffer().getWidth() + "x" + frame.getBuffer().getHeight());
+            
+            // Save debug frame if within 10 seconds
+            if (currentTime - captureStartTime <= DEBUG_DURATION_MS) {
+                saveDebugFrame(frame, currentFrame);
+            }
+            
+            // Send frame to WebRTC VideoSource through CapturerObserver
+            if (videoSource != null && videoSource.getCapturerObserver() != null) {
+                try {
+                    videoSource.getCapturerObserver().onFrameCaptured(frame);
+                    Log.v(TAG, "Frame sent to WebRTC VideoSource successfully");
+                } catch (Exception e) {
+                    Log.e(TAG, "Error sending frame to VideoSource", e);
+                }
+            } else {
+                Log.w(TAG, "VideoSource or CapturerObserver is null, cannot send frame");
+            }
+        }
+    }
+    
+    private void startDebugRecording() {
+        debugHandler.post(() -> {
+            try {
+                // Create debug video file
+                String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+                    .format(new Date());
+                File debugVideoFile = new File(debugOutputDir, "screen_capture_" + timestamp + ".mp4");
+                
+                // Initialize MediaRecorder for debug recording
+                debugMediaRecorder = new MediaRecorder();
+                debugMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
+                debugMediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+                debugMediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+                debugMediaRecorder.setVideoSize(screenWidth, screenHeight);
+                debugMediaRecorder.setVideoFrameRate(FRAME_RATE);
+                debugMediaRecorder.setVideoEncodingBitRate(5000000); // 5Mbps
+                debugMediaRecorder.setOutputFile(debugVideoFile.getAbsolutePath());
+                
+                debugMediaRecorder.prepare();
+                debugMediaRecorder.start();
+                
+                // Stop recording after 10 seconds
+                debugHandler.postDelayed(() -> {
+                    try {
+                        if (debugMediaRecorder != null) {
+                            try {
+                                debugMediaRecorder.stop();
+                                Log.d(TAG, "Debug recording saved: " + debugVideoFile.getAbsolutePath());
+                            } catch (RuntimeException e) {
+                                Log.w(TAG, "MediaRecorder stop failed, likely no data recorded: " + e.getMessage());
+                            } finally {
+                                debugMediaRecorder.release();
+                                debugMediaRecorder = null;
+                            }
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error stopping debug recording", e);
+                    }
+                }, DEBUG_DURATION_MS);
+                
+                Log.d(TAG, "Debug recording started: " + debugVideoFile.getAbsolutePath());
+            } catch (Exception e) {
+                Log.e(TAG, "Error starting debug recording", e);
+            }
+        });
+    }
+    
+    private void saveDebugFrame(VideoFrame frame, int frameNumber) {
+        debugHandler.post(() -> {
+            try {
+                // Add frame info to debug queue
+                String frameInfo = String.format(Locale.getDefault(),
+                    "Frame %d: %dx%d, timestamp=%d, rotation=%d",
+                    frameNumber,
+                    frame.getBuffer().getWidth(),
+                    frame.getBuffer().getHeight(),
+                    frame.getTimestampNs(),
+                    frame.getRotation());
+                
+                debugFrameQueue.offer(frameInfo);
+                
+                // Keep only recent frames
+                while (debugFrameQueue.size() > 300) { // ~10 seconds at 30fps
+                    debugFrameQueue.poll();
+                }
+                
+                // Save frame info to file every 30 frames
+                if (frameNumber % 30 == 0) {
+                    saveDebugFrameInfo();
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error saving debug frame info", e);
+            }
+        });
+    }
+    
+    private void saveDebugFrameInfo() {
+        try {
+            String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+                .format(new Date());
+            File debugFile = new File(debugOutputDir, "frame_info_" + timestamp + ".txt");
+            
+            try (FileOutputStream fos = new FileOutputStream(debugFile)) {
+                for (String frameInfo : debugFrameQueue) {
+                    fos.write((frameInfo + "\n").getBytes());
+                }
+            }
+            
+            Log.d(TAG, "Debug frame info saved: " + debugFile.getAbsolutePath());
+        } catch (Exception e) {
+            Log.e(TAG, "Error saving debug frame info to file", e);
         }
     }
     
@@ -113,7 +285,53 @@ public class ScreenCaptureService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        
         stopScreenCapture();
+        
+        // Clean up WebRTC components
+        if (captureHandler != null) {
+            captureHandler.post(() -> {
+                try {
+                    if (surfaceTextureHelper != null) {
+                        surfaceTextureHelper.dispose();
+                        surfaceTextureHelper = null;
+                        Log.d(TAG, "SurfaceTextureHelper disposed");
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error disposing SurfaceTextureHelper", e);
+                }
+            });
+        }
+        
+        if (captureThread != null) {
+            captureThread.quitSafely();
+            try {
+                captureThread.join(1000);
+            } catch (InterruptedException e) {
+                Log.w(TAG, "Interrupted while waiting for capture thread to finish");
+            }
+            captureThread = null;
+            captureHandler = null;
+        }
+        
+        if (debugThread != null) {
+            debugThread.quitSafely();
+            try {
+                debugThread.join(1000);
+            } catch (InterruptedException e) {
+                Log.w(TAG, "Interrupted while waiting for debug thread to finish");
+            }
+            debugThread = null;
+            debugHandler = null;
+        }
+        
+        if (eglBase != null) {
+            eglBase.release();
+            eglBase = null;
+            Log.d(TAG, "EglBase released");
+        }
+        
+        Log.d(TAG, "ScreenCaptureService destroyed");
     }
     
     private void initScreenMetrics() {
@@ -128,168 +346,199 @@ public class ScreenCaptureService extends Service {
         Log.d(TAG, "Screen metrics: " + screenWidth + "x" + screenHeight + " density: " + screenDensity);
     }
     
+private void initWebRTCComponents() {
+        try {
+            // Initialize EGL context for WebRTC
+            eglBase = EglBase.create();
+            
+            // Create capture thread
+            captureThread = new HandlerThread("ScreenCaptureThread");
+            captureThread.start();
+            captureHandler = new Handler(captureThread.getLooper());
+            
+            // Create SurfaceTextureHelper on the capture thread
+            captureHandler.post(() -> {
+                surfaceTextureHelper = SurfaceTextureHelper.create(
+                    "ScreenCaptureSurfaceTextureHelper", 
+                    eglBase.getEglBaseContext()
+                );
+                Log.d(TAG, "WebRTC components initialized successfully");
+            });
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to initialize WebRTC components", e);
+        }
+    }
+    
+    private void initDebugComponents() {
+        try {
+            // Create debug output directory
+            debugOutputDir = new File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "ScreenCaptureDebug");
+            if (!debugOutputDir.exists()) {
+                debugOutputDir.mkdirs();
+            }
+            
+            // Create debug thread
+            debugThread = new HandlerThread("DebugThread");
+            debugThread.start();
+            debugHandler = new Handler(debugThread.getLooper());
+            
+            Log.d(TAG, "Debug components initialized, output dir: " + debugOutputDir.getAbsolutePath());
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to initialize debug components", e);
+        }
+    }
+    
     private void startScreenCapture(int resultCode, Intent data) {
         try {
-            // Initialize MediaProjection
-            MediaProjectionManager projectionManager = 
-                (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-            mediaProjection = projectionManager.getMediaProjection(resultCode, data);
-            Log.d(TAG, "get MediaProjection instance from MainActivity");
-
-            // Initialize MediaCodec encoder
-            initEncoder();
+            Log.d(TAG, "Starting WebRTC-based screen capture");
             
-            // Create VirtualDisplay
-            createVirtualDisplay();
+            // Store MediaProjection data for ScreenCapturerAndroid
+            this.mediaProjectionResultCode = resultCode;
+            this.mediaProjectionData = data;
             
-            Log.d(TAG, "Screen capture started successfully");
+            // Stop any existing capture first to prevent conflicts
+            if (isCapturing) {
+                Log.d(TAG, "Stopping existing capture before starting new one");
+                stopScreenCapture();
+                // Wait a bit for cleanup to complete
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            
+            // Initialize ScreenCapturerAndroid on the capture thread
+            captureHandler.post(() -> {
+                try {
+                    // Ensure SurfaceTextureHelper is ready and not already listening
+                    if (surfaceTextureHelper != null && videoSource != null) {
+                        // Create MediaProjection callback
+                        MediaProjection.Callback projectionCallback = new MediaProjection.Callback() {
+                            @Override
+                            public void onStop() {
+                                Log.d(TAG, "MediaProjection stopped");
+                                stopScreenCapture();
+                            }
+                        };
+                        
+                        // Create ScreenCapturerAndroid
+                        screenCapturer = new ScreenCapturerAndroid(data, projectionCallback);
+                        
+                        // Use our custom observer that forwards frames to VideoSource
+                        ScreenCaptureObserver customObserver = new ScreenCaptureObserver();
+                        
+                        // Initialize the capturer with SurfaceTextureHelper and custom observer
+                        screenCapturer.initialize(
+                            surfaceTextureHelper,
+                            getApplicationContext(),
+                            customObserver
+                        );
+                        
+                        // Start capturing
+                        screenCapturer.startCapture(screenWidth, screenHeight, FRAME_RATE);
+                        isCapturing = true;
+                        
+                        // Start debug recording after WebRTC capture is started
+                        startDebugRecording();
+                        
+                        Log.d(TAG, "WebRTC screen capture started successfully");
+                    } else {
+                        Log.e(TAG, "SurfaceTextureHelper or VideoSource not ready");
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error starting WebRTC screen capture", e);
+                }
+            });
+            
         } catch (Exception e) {
             Log.e(TAG, "Error starting screen capture", e);
         }
     }
     
-    private void initEncoder() throws IOException {
-        MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, screenWidth, screenHeight);
-        format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-        format.setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE);
-        format.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE);
-        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL);
-        
-        // Enable low latency mode
-        format.setInteger(MediaFormat.KEY_LATENCY, 0);
-        format.setInteger(MediaFormat.KEY_PRIORITY, 0);
-        
-        encoder = MediaCodec.createEncoderByType(MIME_TYPE);
-        encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        inputSurface = encoder.createInputSurface();
-        
-        encoder.setCallback(new MediaCodec.Callback() {
-            @Override
-            public void onInputBufferAvailable(MediaCodec codec, int index) {
-                // Not used for surface input
-            }
-            
-            @Override
-            public void onOutputBufferAvailable(MediaCodec codec, int index, MediaCodec.BufferInfo info) {
-                handleEncodedFrame(codec, index, info);
-            }
-            
-            @Override
-            public void onError(MediaCodec codec, MediaCodec.CodecException e) {
-                Log.e(TAG, "MediaCodec error", e);
-            }
-            
-            @Override
-            public void onOutputFormatChanged(MediaCodec codec, MediaFormat format) {
-                Log.d(TAG, "Output format changed: " + format);
-            }
-        });
-        
-        encoder.start();
-        Log.d(TAG, "MediaCodec started");
-    }
-    
-    private void createVirtualDisplay() {
-        virtualDisplay = mediaProjection.createVirtualDisplay(
-            "ScreenCapture",
-            screenWidth,
-            screenHeight,
-            screenDensity,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            inputSurface,
-            null,
-            null
-        );
-        Log.d(TAG, "VirtualDisplay created");
-    }
-    
+    // WebRTC VideoSource setter - called by WebRTCManager
     public void setVideoSource(VideoSource videoSource) {
         this.videoSource = videoSource;
+        Log.d(TAG, "VideoSource set for screen capture");
+        
+        // If we have pending capture request and now have VideoSource, start capture
+        if (mediaProjectionResultCode != 0 && mediaProjectionData != null && !isCapturing) {
+            Log.d(TAG, "Starting delayed screen capture now that VideoSource is available");
+            startScreenCapture(mediaProjectionResultCode, mediaProjectionData);
+        }
     }
     
-    private void handleEncodedFrame(MediaCodec codec, int index, MediaCodec.BufferInfo info) {
-        ByteBuffer encodedData = codec.getOutputBuffer(index);
-        if (encodedData != null && info.size > 0) {
-            // Extract encoded frame data
-            byte[] frameData = new byte[info.size];
-            encodedData.position(info.offset);
-            encodedData.get(frameData, 0, info.size);
+
+    
+
+    
+    public void stopScreenCapture() {
+        try {
+            Log.d(TAG, "Stopping WebRTC screen capture");
             
-            handleEncodedFrame(frameData);
-        }
-        
-        codec.releaseOutputBuffer(index, false);
-    }
-    
-    private void handleEncodedFrame(byte[] frameData) {
-        Log.d(TAG, "Encoded frame size: " + frameData.length + " bytes, timestamp: " + frameTimestamp);
-
-        if (videoSource != null && videoSource.getCapturerObserver() != null) {
-            // TODO: Implement proper H.264 decoding to YUV and then conversion to I420Buffer.
-            // The current approach of sending raw H.264 data or an empty buffer will not work correctly.
-            // For a functional solution, you need to decode the H.264 `frameData` into a YUV format,
-            // then create an I420Buffer from that YUV data.
-            // Example placeholder for where conversion should happen:
-            // YuvImage yuvImage = decodeH264ToYuv(frameData, screenWidth, screenHeight);
-            // I420Buffer i420Buffer = convertYuvToI420Buffer(yuvImage);
-
-            // Using a dummy buffer for now will result in a black screen or incorrect video.
-            // This highlights that the data flow is present, but the format is wrong.
-            final I420Buffer i420Buffer;
-            try {
-                // Attempting to create a buffer, this is NOT a correct conversion
-                // and is just to prevent a crash and show data is flowing.
-                // A real implementation requires decoding H.264 to YUV first.
-                Log.w(TAG, "Creating a placeholder I420Buffer. THIS IS NOT A CORRECT VIDEO FRAME.");
-                i420Buffer = JavaI420Buffer.allocate(screenWidth, screenHeight);
-                // You could try to fill this buffer with some pattern or color to verify if it's being sent
-                // For example, fill with a color:
-                // ByteBuffer y = i420Buffer.getDataY();
-                // ByteBuffer u = i420Buffer.getDataU();
-                // ByteBuffer v = i420Buffer.getDataV();
-                // for(int i=0; i < y.capacity(); i++) y.put(i, (byte)128); // Grey
-                // for(int i=0; i < u.capacity(); i++) u.put(i, (byte)0);
-                // for(int i=0; i < v.capacity(); i++) v.put(i, (byte)0);
-
-                VideoFrame videoFrame = new VideoFrame(i420Buffer, 0 /* rotation */, frameTimestamp * 1_000_000 /* ns */);
-                videoSource.getCapturerObserver().onFrameCaptured(videoFrame);
-                videoFrame.release(); // Release the frame after sending
-                frameTimestamp++;
-            } catch (Exception e) {
-                Log.e(TAG, "Error creating or sending I420Buffer to WebRTC", e);
+            isCapturing = false;
+            
+            // Stop screen capturer on capture thread
+            if (captureHandler != null) {
+                captureHandler.post(() -> {
+                    try {
+                        if (screenCapturer != null && surfaceTextureHelper != null) {
+                            screenCapturer.stopCapture();
+                            screenCapturer.dispose();
+                            screenCapturer = null;
+                            Log.d(TAG, "ScreenCapturerAndroid stopped and disposed");
+                        } else if (screenCapturer != null) {
+                            Log.w(TAG, "SurfaceTextureHelper is null, disposing screenCapturer without stopCapture");
+                            screenCapturer.dispose();
+                            screenCapturer = null;
+                        }
+                        
+                        // Stop SurfaceTextureHelper listener to prevent "listener has already been set" error
+                        if (surfaceTextureHelper != null) {
+                            try {
+                                surfaceTextureHelper.stopListening();
+                                Log.d(TAG, "SurfaceTextureHelper listener stopped");
+                            } catch (Exception e) {
+                                Log.w(TAG, "Error stopping SurfaceTextureHelper listener: " + e.getMessage());
+                            }
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error stopping screen capturer", e);
+                    }
+                });
             }
-        } else {
-            Log.w(TAG, "videoSource or capturerObserver is null, cannot send frame");
-        }
-    }
-    
-    private void stopScreenCapture() {
-        if (virtualDisplay != null) {
-            virtualDisplay.release();
-            virtualDisplay = null;
-        }
-        
-        if (encoder != null) {
-            try {
-                encoder.stop();
-                encoder.release();
-            } catch (Exception e) {
-                Log.e(TAG, "Error stopping encoder", e);
+            
+            // Stop debug recording
+            if (debugHandler != null) {
+                debugHandler.post(() -> {
+                    try {
+                        if (debugMediaRecorder != null) {
+                            try {
+                                debugMediaRecorder.stop();
+                                Log.d(TAG, "Debug recording stopped");
+                            } catch (RuntimeException e) {
+                                Log.w(TAG, "MediaRecorder stop failed: " + e.getMessage());
+                            } finally {
+                                debugMediaRecorder.release();
+                                debugMediaRecorder = null;
+                            }
+                        }
+                        
+                        // Save final debug frame info
+                        if (!debugFrameQueue.isEmpty()) {
+                            saveDebugFrameInfo();
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error stopping debug recording", e);
+                    }
+                });
             }
-            encoder = null;
+            
+            Log.d(TAG, "WebRTC screen capture stopped successfully");
+        } catch (Exception e) {
+            Log.e(TAG, "Error stopping screen capture", e);
         }
-        
-        if (inputSurface != null) {
-            inputSurface.release();
-            inputSurface = null;
-        }
-        
-        if (mediaProjection != null) {
-            mediaProjection.stop();
-            mediaProjection = null;
-        }
-        
-        Log.d(TAG, "Screen capture stopped");
     }
 }
 

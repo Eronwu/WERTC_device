@@ -92,60 +92,59 @@ public class WebSocketService extends Service {
                     conn.send(gson.toJson(deviceInfo));
                 }
             
-            @Override
-            public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-                Log.d(TAG, "Client disconnected: " + conn.getRemoteSocketAddress());
-                clients.remove(conn);
-                
-                // Clean up WebRTC connection
-                WebRTCManager webRTCManager = webRTCManagers.remove(conn);
-                if (webRTCManager != null) {
-                    webRTCManager.cleanup();
+                @Override
+                public void onClose(WebSocket conn, int code, String reason, boolean remote) {
+                    Log.d(TAG, "Client disconnected: " + conn.getRemoteSocketAddress());
+                    clients.remove(conn);
+
+                    // Clean up WebRTC connection
+                    WebRTCManager webRTCManager = webRTCManagers.remove(conn);
+                    if (webRTCManager != null) {
+                        webRTCManager.cleanup();
+                    }
                 }
-            }
-            
-            @Override
-            public void onMessage(WebSocket conn, String message) {
-                Log.d(TAG, "Received message: " + message);
-                handleMessage(conn, message);
-            }
-            
-            @Override
-            public void onError(WebSocket conn, Exception ex) {
-                Log.e(TAG, "WebSocket error", ex);
-            }
-            
-            @Override
-            public void onStart() {
-                Log.d(TAG, "WebSocket server started on 0.0.0.0:" + PORT);
-                Log.d(TAG, "Server address: " + server.getAddress());
-                // Log network interfaces for debugging
-                try {
-                    java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
-                    while (interfaces.hasMoreElements()) {
-                        java.net.NetworkInterface ni = interfaces.nextElement();
-                        if (ni.isUp() && !ni.isLoopback()) {
-                            java.util.Enumeration<java.net.InetAddress> addresses = ni.getInetAddresses();
-                            while (addresses.hasMoreElements()) {
-                                java.net.InetAddress addr = addresses.nextElement();
-                                if (addr instanceof java.net.Inet4Address) {
-                                    Log.d(TAG, "Available network interface: " + ni.getName() + " - " + addr.getHostAddress());
+
+                @Override
+                public void onMessage(WebSocket conn, String message) {
+                    Log.d(TAG, "Received message: " + message);
+                    handleMessage(conn, message);
+                }
+
+                @Override
+                public void onError(WebSocket conn, Exception ex) {
+                    Log.e(TAG, "WebSocket error", ex);
+                }
+
+                @Override
+                public void onStart() {
+                    Log.d(TAG, "WebSocket server started on 0.0.0.0:" + PORT);
+                    Log.d(TAG, "Server address: " + server.getAddress());
+                    // Log network interfaces for debugging
+                    try {
+                        java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
+                        while (interfaces.hasMoreElements()) {
+                            java.net.NetworkInterface ni = interfaces.nextElement();
+                            if (ni.isUp() && !ni.isLoopback()) {
+                                java.util.Enumeration<java.net.InetAddress> addresses = ni.getInetAddresses();
+                                while (addresses.hasMoreElements()) {
+                                    java.net.InetAddress addr = addresses.nextElement();
+                                    if (addr instanceof java.net.Inet4Address) {
+                                        Log.d(TAG, "Available network interface: " + ni.getName() + " - " + addr.getHostAddress());
+                                    }
                                 }
                             }
                         }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error listing network interfaces", e);
                     }
-                } catch (Exception e) {
-                    Log.e(TAG, "Error listing network interfaces", e);
                 }
-            }
-        };
+            };
         
-        // Enable address reuse to prevent "Address already in use" errors
-        server.setReuseAddr(true);
+            // Enable address reuse to prevent "Address already in use" errors
+            server.setReuseAddr(true);
         
-        server.start();
-        Log.d(TAG, "Starting WebSocket server on port " + PORT);
-        
+            server.start();
+            Log.d(TAG, "Starting WebSocket server on port " + PORT);
         } catch (Exception e) {
             Log.e(TAG, "Failed to start WebSocket server", e);
             // Retry after a short delay
