@@ -226,10 +226,19 @@ class WebRTCService {
     }
   }
   
-  void dispose() {
+  void cleanupConnection() {
     _dataChannel?.close();
+    _dataChannel = null;
     _peerConnection?.close();
-    _remoteStreamController.close();
+    _peerConnection = null;
+    _remoteStream = null;
+  }
+
+  void dispose() {
+    cleanupConnection();
+    if (!_remoteStreamController.isClosed) {
+      _remoteStreamController.close();
+    }
   }
 }
 

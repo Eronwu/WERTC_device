@@ -9,12 +9,23 @@ class WebSocketService {
   WebSocketChannel? _channel;
   final StreamController<Map<String, dynamic>> _messageController = 
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<bool> _connectionController = 
+      StreamController<bool>.broadcast();
+  
+  Device? _lastDevice;
+  Timer? _reconnectTimer;
+  bool _isReconnecting = false;
   
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
+  Stream<bool> get connectionStream => _connectionController.stream;
   bool get isConnected => _channel != null;
+  bool get isReconnecting => _isReconnecting;
   
   Future<bool> connect(Device device) async {
     try {
+      _lastDevice = device;
+      _cancelReconnectTimer();
+      
       final uri = Uri.parse('ws://${device.ipAddress}:${device.port}');
       debugPrint('Connecting to: $uri');
       
@@ -32,27 +43,56 @@ class WebSocketService {
         },
         onError: (error) {
           debugPrint('WebSocket error: $error');
-          disconnect();
+          _handleDisconnection();
         },
         onDone: () {
           debugPrint('WebSocket connection closed');
-          disconnect();
+          _handleDisconnection();
         },
       );
       
       // Wait a moment to ensure connection is established
       await Future.delayed(const Duration(milliseconds: 500));
       
+      _connectionController.add(true);
+      _isReconnecting = false;
       return true;
     } catch (e) {
       debugPrint('Failed to connect: $e');
+      _connectionController.add(false);
+      _scheduleReconnection();
       return false;
     }
   }
   
   void disconnect() {
+    _cancelReconnectTimer();
     _channel?.sink.close();
     _channel = null;
+    _connectionController.add(false);
+  }
+
+  void _handleDisconnection() {
+    _channel = null;
+    _connectionController.add(false);
+    _scheduleReconnection();
+  }
+
+  void _scheduleReconnection() {
+    if (_lastDevice != null && !_isReconnecting) {
+      _isReconnecting = true;
+      _reconnectTimer = Timer(const Duration(seconds: 3), () {
+        if (_lastDevice != null) {
+          debugPrint('Attempting to reconnect...');
+          connect(_lastDevice!);
+        }
+      });
+    }
+  }
+
+  void _cancelReconnectTimer() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
   }
   
   void sendMessage(Map<String, dynamic> message) {
@@ -102,8 +142,10 @@ class WebSocketService {
   }
   
   void dispose() {
+    _cancelReconnectTimer();
     disconnect();
     _messageController.close();
+    _connectionController.close();
   }
 }
 
