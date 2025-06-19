@@ -48,7 +48,7 @@ import android.os.HandlerThread;
 
 public class ScreenCaptureService extends Service {
     private static final String TAG = "ScreenCaptureService";
-    private static final int FRAME_RATE = 30;
+    private static final int FRAME_RATE = 15; // 30frame will be appear delay more
     
     // WebRTC screen capture components
     private ScreenCapturerAndroid screenCapturer;

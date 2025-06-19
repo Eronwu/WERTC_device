@@ -8,8 +8,8 @@ import '../models/device.dart';
 
 class DeviceDiscoveryService {
   static const int _defaultPort = 4321;
-  static const int _timeoutSeconds = 2;
-  static const String _targetIP = '192.168.31.89';  // 直接指定目标设备IP
+  static const int _timeoutSeconds = 8;
+  static const String _targetIP = '192.168.10.182';  // 直接指定目标设备IP
   
   final NetworkInfo _networkInfo = NetworkInfo();
   final StreamController<Device> _deviceController = StreamController<Device>.broadcast();

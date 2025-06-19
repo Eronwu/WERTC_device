@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../models/device.dart';
 import '../models/control_event.dart';
@@ -26,12 +27,26 @@ class _ControlScreenState extends State<ControlScreen> {
   @override
   void initState() {
     super.initState();
+    // Set landscape orientation and fullscreen
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    
     _initializeServices();
     _connectToDevice();
   }
 
   @override
   void dispose() {
+    // Restore portrait orientation and system UI
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    
     _remoteRenderer.dispose();
     _webRTCService.dispose();
     _webSocketService.dispose();
@@ -128,120 +143,181 @@ class _ControlScreenState extends State<ControlScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.device.name),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: _disconnect,
-          ),
-        ],
-      ),
-      body: Column(
+      body: Stack(
         children: [
-          // Connection status
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            color: _isConnected ? Colors.green[100] : Colors.red[100],
-            child: Row(
-              children: [
-                Icon(
-                  _isConnected ? Icons.check_circle : Icons.error,
-                  color: _isConnected ? Colors.green : Colors.red,
+          // Main content area with video and controls side by side
+          Row(
+            children: [
+              // Video display area
+              Expanded(
+                child: Container(
+                  color: Colors.black,
+                  child: _isConnected
+                      ? GestureDetector(
+                          onTapUp: _handleTap,
+                          onPanUpdate: _handlePanUpdate,
+                          child: RTCVideoView(
+                            _remoteRenderer,
+                            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                          ),
+                        )
+                      : Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.videocam_off,
+                                size: 64,
+                                color: Colors.grey[400],
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'No video stream',
+                                style: TextStyle(
+                                  color: Colors.grey[400],
+                                  fontSize: 18,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  _connectionStatus,
-                  style: TextStyle(
-                    color: _isConnected ? Colors.green[800] : Colors.red[800],
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                if (_isConnecting) ...[
-                  const Spacer(),
-                  const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          
-          // Video display area
-          Expanded(
-            child: Container(
-              color: Colors.black,
-              child: _isConnected
-                  ? GestureDetector(
-                      onTapUp: _handleTap,
-                      onPanUpdate: _handlePanUpdate,
-                      child: RTCVideoView(
-                        _remoteRenderer,
-                        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+              ),
+              
+              // Control sidebar on the right
+              Container(
+                width: 120,
+                color: Colors.black87,
+                child: Column(
+                  children: [
+                    // Connection status at top
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(8),
+                      child: Column(
+                        children: [
+                          Icon(
+                            _isConnected ? Icons.check_circle : Icons.error,
+                            color: _isConnected ? Colors.green : Colors.red,
+                            size: 20,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _isConnected ? 'Connected' : 'Disconnected',
+                            style: TextStyle(
+                              color: _isConnected ? Colors.green : Colors.red,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          if (_isConnecting)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 4),
+                              child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            ),
+                        ],
                       ),
-                    )
-                  : Center(
+                    ),
+                    
+                    // Control buttons in the center
+                    Expanded(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(
-                            Icons.videocam_off,
-                            size: 64,
-                            color: Colors.grey[400],
+                          ElevatedButton(
+                            onPressed: _isConnected ? () {
+                              // Send back button event
+                              final event = ControlEvent.click(-1, -1); // Special coordinates for back
+                              _webRTCService.sendControlEvent(event);
+                            } : null,
+                            style: ElevatedButton.styleFrom(
+                              minimumSize: const Size(80, 50),
+                              backgroundColor: Colors.grey[800],
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.arrow_back, size: 20),
+                                Text('Back', style: TextStyle(fontSize: 10)),
+                              ],
+                            ),
                           ),
                           const SizedBox(height: 16),
-                          Text(
-                            'No video stream',
-                            style: TextStyle(
-                              color: Colors.grey[400],
-                              fontSize: 18,
+                          ElevatedButton(
+                            onPressed: _isConnected ? () {
+                              // Send home button event
+                              final event = ControlEvent.click(-2, -2); // Special coordinates for home
+                              _webRTCService.sendControlEvent(event);
+                            } : null,
+                            style: ElevatedButton.styleFrom(
+                              minimumSize: const Size(80, 50),
+                              backgroundColor: Colors.grey[800],
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.home, size: 20),
+                                Text('Home', style: TextStyle(fontSize: 10)),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton(
+                            onPressed: _isConnected ? () {
+                              // Send menu button event
+                              final event = ControlEvent.click(-3, -3); // Special coordinates for menu
+                              _webRTCService.sendControlEvent(event);
+                            } : null,
+                            style: ElevatedButton.styleFrom(
+                              minimumSize: const Size(80, 50),
+                              backgroundColor: Colors.grey[800],
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.menu, size: 20),
+                                Text('Menu', style: TextStyle(fontSize: 10)),
+                              ],
                             ),
                           ),
                         ],
                       ),
                     ),
-            ),
+                    
+                    // Disconnect button at bottom
+                    Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: ElevatedButton(
+                        onPressed: _disconnect,
+                        style: ElevatedButton.styleFrom(
+                          minimumSize: const Size(80, 40),
+                          backgroundColor: Colors.red[700],
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.close, size: 16),
+                            Text('Exit', style: TextStyle(fontSize: 10)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           
-          // Control buttons
-          Container(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: _isConnected ? () {
-                    // Send back button event
-                    final event = ControlEvent.click(-1, -1); // Special coordinates for back
-                    _webRTCService.sendControlEvent(event);
-                  } : null,
-                  icon: const Icon(Icons.arrow_back),
-                  label: const Text('Back'),
-                ),
-                ElevatedButton.icon(
-                  onPressed: _isConnected ? () {
-                    // Send home button event
-                    final event = ControlEvent.click(-2, -2); // Special coordinates for home
-                    _webRTCService.sendControlEvent(event);
-                  } : null,
-                  icon: const Icon(Icons.home),
-                  label: const Text('Home'),
-                ),
-                ElevatedButton.icon(
-                  onPressed: _isConnected ? () {
-                    // Send menu button event
-                    final event = ControlEvent.click(-3, -3); // Special coordinates for menu
-                    _webRTCService.sendControlEvent(event);
-                  } : null,
-                  icon: const Icon(Icons.menu),
-                  label: const Text('Menu'),
-                ),
-              ],
-            ),
-          ),
+
         ],
       ),
     );
