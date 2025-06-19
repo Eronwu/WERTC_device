@@ -50,7 +50,7 @@ import android.os.HandlerThread;
 public class ScreenCaptureService extends Service {
     private static final String TAG = "ScreenCaptureService";
     private static final int FRAME_RATE = 30;
-    private static final int DEBUG_DURATION_MS = 10000; // 10 seconds for debug recording
+    private static final int DEBUG_DURATION_MS = 20000; // 20 seconds for debug recording
     
     // WebRTC screen capture components
     private ScreenCapturerAndroid screenCapturer;
@@ -151,41 +151,22 @@ public class ScreenCaptureService extends Service {
                     .format(new Date());
                 File debugVideoFile = new File(debugOutputDir, "screen_capture_" + timestamp + ".mp4");
                 
-                // Initialize MediaRecorder for debug recording
-                debugMediaRecorder = new MediaRecorder();
-                debugMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-                debugMediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-                debugMediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
-                debugMediaRecorder.setVideoSize(screenWidth, screenHeight);
-                debugMediaRecorder.setVideoFrameRate(FRAME_RATE);
-                debugMediaRecorder.setVideoEncodingBitRate(5000000); // 5Mbps
-                debugMediaRecorder.setOutputFile(debugVideoFile.getAbsolutePath());
+                // Skip MediaRecorder debug recording to avoid conflicts with ScreenCapturerAndroid
+                // Instead, just log frame capture info which we already do in saveDebugFrame
+                Log.d(TAG, "Debug recording placeholder started: " + debugVideoFile.getAbsolutePath());
+                Log.d(TAG, "Note: MediaRecorder disabled to avoid conflicts with WebRTC screen capture");
                 
-                debugMediaRecorder.prepare();
-                debugMediaRecorder.start();
-                
-                // Stop recording after 10 seconds
+                // Stop debug logging after the specified duration
                 debugHandler.postDelayed(() -> {
-                    try {
-                        if (debugMediaRecorder != null) {
-                            try {
-                                debugMediaRecorder.stop();
-                                Log.d(TAG, "Debug recording saved: " + debugVideoFile.getAbsolutePath());
-                            } catch (RuntimeException e) {
-                                Log.w(TAG, "MediaRecorder stop failed, likely no data recorded: " + e.getMessage());
-                            } finally {
-                                debugMediaRecorder.release();
-                                debugMediaRecorder = null;
-                            }
-                        }
-                    } catch (Exception e) {
-                        Log.e(TAG, "Error stopping debug recording", e);
+                    Log.d(TAG, "Debug recording period ended");
+                    // Save final debug frame info
+                    if (!debugFrameQueue.isEmpty()) {
+                        saveDebugFrameInfo();
                     }
                 }, DEBUG_DURATION_MS);
                 
-                Log.d(TAG, "Debug recording started: " + debugVideoFile.getAbsolutePath());
             } catch (Exception e) {
-                Log.e(TAG, "Error starting debug recording", e);
+                Log.e(TAG, "Error in debug recording", e);
             }
         });
     }
@@ -459,6 +440,12 @@ private void initWebRTCComponents() {
     
     // WebRTC VideoSource setter - called by WebRTCManager
     public void setVideoSource(VideoSource videoSource) {
+        // Prevent setting VideoSource multiple times to avoid duplicate capture attempts
+        if (this.videoSource != null) {
+            Log.w(TAG, "VideoSource already set, ignoring duplicate setVideoSource call");
+            return;
+        }
+        
         this.videoSource = videoSource;
         Log.d(TAG, "VideoSource set for screen capture");
         
@@ -513,22 +500,11 @@ private void initWebRTCComponents() {
             if (debugHandler != null) {
                 debugHandler.post(() -> {
                     try {
-                        if (debugMediaRecorder != null) {
-                            try {
-                                debugMediaRecorder.stop();
-                                Log.d(TAG, "Debug recording stopped");
-                            } catch (RuntimeException e) {
-                                Log.w(TAG, "MediaRecorder stop failed: " + e.getMessage());
-                            } finally {
-                                debugMediaRecorder.release();
-                                debugMediaRecorder = null;
-                            }
-                        }
-                        
                         // Save final debug frame info
                         if (!debugFrameQueue.isEmpty()) {
                             saveDebugFrameInfo();
                         }
+                        Log.d(TAG, "Debug frame logging stopped");
                     } catch (Exception e) {
                         Log.e(TAG, "Error stopping debug recording", e);
                     }

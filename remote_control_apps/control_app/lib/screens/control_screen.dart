@@ -68,8 +68,8 @@ class _ControlScreenState extends State<ControlScreen> {
       // Initialize WebRTC
       await _webRTCService.initialize();
       
-      // Create offer to start WebRTC connection
-      await _webRTCService.createOffer();
+      // Request WebRTC connection from device (device will create offer)
+      await _webRTCService.requestConnection();
 
       setState(() {
         _isConnected = true;

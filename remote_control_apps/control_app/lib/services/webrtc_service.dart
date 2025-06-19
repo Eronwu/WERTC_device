@@ -38,9 +38,12 @@ class WebRTCService {
       );
     };
     
-    // Handle remote stream
+    // Handle remote stream (legacy callback)
     _peerConnection!.onAddStream = (MediaStream stream) {
       debugPrint('Remote stream added with ${stream.getVideoTracks().length} video tracks');
+      for (var track in stream.getVideoTracks()) {
+        debugPrint('Video track: ${track.id}, enabled: ${track.enabled}');
+      }
       _remoteStream = stream;
       _remoteStreamController.add(stream);
     };
@@ -50,11 +53,20 @@ class WebRTCService {
       _remoteStream = null;
     };
     
+    // Handle remote track (modern callback - preferred)
     _peerConnection!.onTrack = (event) {
-      debugPrint('Remote track added: ${event.track.kind}');
-      if (event.streams.isNotEmpty) {
-        _remoteStream = event.streams[0];
-        _remoteStreamController.add(event.streams[0]);
+      debugPrint('Remote track added: ${event.track.kind}, id: ${event.track.id}');
+      debugPrint('Track streams: ${event.streams.length}');
+      
+      if (event.track.kind == 'video') {
+        debugPrint('Video track received, enabled: ${event.track.enabled}');
+        if (event.streams.isNotEmpty) {
+          debugPrint('Adding video stream to controller');
+          _remoteStream = event.streams[0];
+          _remoteStreamController.add(event.streams[0]);
+        } else {
+          debugPrint('No streams associated with video track');
+        }
       }
     };
     
@@ -64,22 +76,38 @@ class WebRTCService {
       _dataChannel = channel;
     };
     
-    // Create data channel for control events
-    _dataChannel = await _peerConnection!.createDataChannel(
-      'control',
-      RTCDataChannelInit()..ordered = true,
-    );
+    // Handle connection state changes
+    _peerConnection!.onConnectionState = (state) {
+      debugPrint('WebRTC connection state: $state');
+    };
+    
+    _peerConnection!.onIceConnectionState = (state) {
+      debugPrint('ICE connection state: $state');
+    };
+    
+    _peerConnection!.onSignalingState = (state) {
+      debugPrint('Signaling state: $state');
+    };
     
     debugPrint('WebRTC initialized');
+  }
+  
+  Future<void> requestConnection() async {
+    // Request WebRTC connection from device instead of creating offer
+    _webSocketService.requestWebRTCConnection();
+    debugPrint('Requested WebRTC connection from device');
   }
   
   Future<void> createOffer() async {
     if (_peerConnection == null) return;
     
-    // Create offer with video constraints
-    final constraints = {
-      'offerToReceiveAudio': false,
-      'offerToReceiveVideo': true,
+    // Create offer with video constraints - use proper MediaConstraints format
+    final constraints = <String, dynamic>{
+      'mandatory': <String, dynamic>{
+        'OfferToReceiveAudio': false,
+        'OfferToReceiveVideo': true,
+      },
+      'optional': <Map<String, dynamic>>[],
     };
     
     final offer = await _peerConnection!.createOffer(constraints);
@@ -91,34 +119,55 @@ class WebRTCService {
   
   Future<void> _handleSignalingMessage(Map<String, dynamic> message) async {
     final type = message['type'];
+    debugPrint('Received signaling message: $type');
     
     switch (type) {
       case 'offer':
-        // Handle nested sdp object from device
+        // Handle both standard and nested sdp formats from device
         final sdpData = message['sdp'];
         final sdpString = sdpData is Map ? sdpData['sdp'] : sdpData;
+        debugPrint('Received offer from device');
         await _handleOffer(sdpString);
         break;
       case 'answer':
-        // Handle nested sdp object from device
+        // Handle both standard and nested sdp formats from device
         final sdpData = message['sdp'];
         final sdpString = sdpData is Map ? sdpData['sdp'] : sdpData;
+        debugPrint('Received answer from device');
         await _handleAnswer(sdpString);
         break;
       case 'ice_candidate':
+        debugPrint('Received ICE candidate from device');
         await _handleIceCandidate(message);
         break;
+      default:
+        debugPrint('Unknown message type: $type');
     }
   }
   
   Future<void> _handleOffer(String sdp) async {
     if (_peerConnection == null) return;
     
+    debugPrint('Setting remote offer SDP');
     await _peerConnection!.setRemoteDescription(
       RTCSessionDescription(sdp, 'offer'),
     );
     
-    final answer = await _peerConnection!.createAnswer();
+    // Create answer - let WebRTC handle the direction based on the offer
+    final constraints = <String, dynamic>{
+      'mandatory': <String, dynamic>{
+        'OfferToReceiveAudio': false,
+        'OfferToReceiveVideo': true,
+      },
+      'optional': <Map<String, dynamic>>[],
+    };
+    
+    debugPrint('Creating answer');
+    final answer = await _peerConnection!.createAnswer(constraints);
+    
+    // The answer should automatically be recvonly to match the sendonly offer
+    debugPrint('Answer SDP: ${answer.sdp}');
+    
     await _peerConnection!.setLocalDescription(answer);
     
     _webSocketService.sendAnswer(answer.sdp!);
@@ -138,7 +187,7 @@ class WebRTCService {
   Future<void> _handleIceCandidate(Map<String, dynamic> message) async {
     if (_peerConnection == null) return;
     
-    // Handle nested candidate object from device
+    // Handle both standard and nested candidate formats from device
     final candidateData = message['candidate'];
     final candidateString = candidateData is Map ? candidateData['candidate'] : candidateData;
     final sdpMid = candidateData is Map ? candidateData['sdpMid'] : message['sdpMid'];

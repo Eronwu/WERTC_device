@@ -41,10 +41,25 @@ public class WebRTCManager {
                         .createInitializationOptions();
         PeerConnectionFactory.initialize(initializationOptions);
         
+        // Create shared EGL context for consistent rendering
+        EglBase rootEglBase = EglBase.create();
+        
+        // Configure video encoder/decoder factories with proper hardware acceleration
+        VideoEncoderFactory encoderFactory = new DefaultVideoEncoderFactory(
+                rootEglBase.getEglBaseContext(), true, true);
+        VideoDecoderFactory decoderFactory = new DefaultVideoDecoderFactory(
+                rootEglBase.getEglBaseContext());
+        
         PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
+        options.networkIgnoreMask = 0; // Don't ignore any network types
+        
         peerConnectionFactory = PeerConnectionFactory.builder()
                 .setOptions(options)
+                .setVideoEncoderFactory(encoderFactory)
+                .setVideoDecoderFactory(decoderFactory)
                 .createPeerConnectionFactory();
+        
+        Log.d(TAG, "PeerConnectionFactory initialized with complete codec support");
     }
     
     public void createPeerConnection(WebSocket webSocket) {
@@ -66,15 +81,24 @@ public class WebRTCManager {
         dataChannelInit.ordered = true;
         dataChannel = peerConnection.createDataChannel("control", dataChannelInit);
         
-        // Create video track from screen capture
+        // Create video track from screen capture - only do this once during peer connection creation
         createVideoTrack();
     }
     
     private void createVideoTrack() {
         try {
-            // Create video source from screen capture
-            videoSource = peerConnectionFactory.createVideoSource(false);
+            // Prevent creating video track multiple times
+            if (videoSource != null || videoTrack != null) {
+                Log.w(TAG, "Video track already created, skipping duplicate creation");
+                return;
+            }
+            
+            // Create video source from screen capture (isScreencast = true for screen capture)
+            videoSource = peerConnectionFactory.createVideoSource(true);
             videoTrack = peerConnectionFactory.createVideoTrack("video_track", videoSource);
+            
+            // Enable video track
+            videoTrack.setEnabled(true);
             
             // Use modern addTrack API instead of deprecated addStream
             // Create stream labels list for track association
@@ -85,6 +109,18 @@ public class WebRTCManager {
             
             if (sender != null) {
                 Log.d(TAG, "Video track added successfully via addTrack, sender: " + sender.id());
+                
+                // Configure sender parameters for screen sharing
+                RtpParameters parameters = sender.getParameters();
+                if (parameters != null) {
+                    // Set up encoding parameters for screen sharing
+                    for (RtpParameters.Encoding encoding : parameters.encodings) {
+                        encoding.maxBitrateBps = 2000000; // 2 Mbps max for screen share
+                        encoding.maxFramerate = 30; // 30 fps max
+                    }
+                    sender.setParameters(parameters);
+                    Log.d(TAG, "Configured sender parameters for screen sharing");
+                }
             } else {
                 Log.e(TAG, "Failed to add video track - sender is null");
             }
@@ -98,10 +134,75 @@ public class WebRTCManager {
         }
     }
     
+    public void createOfferWithVideo() {
+        // Create offer with explicit send-only constraints for screen sharing
+        MediaConstraints constraints = new MediaConstraints();
+        // Explicitly disable receiving for send-only screen share
+        constraints.mandatory.add(new MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"));
+        constraints.mandatory.add(new MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"));
+        
+        peerConnection.createOffer(new SdpObserver() {
+            @Override
+            public void onCreateSuccess(SessionDescription sessionDescription) {
+                Log.d(TAG, "Offer created successfully");
+                Log.v(TAG, "Original Offer SDP: " + sessionDescription.description);
+                
+                // Fix SDP to use sendonly for video (screen sharing sender)
+                String modifiedSdp = sessionDescription.description.replace("a=sendrecv", "a=sendonly");
+                SessionDescription fixedSessionDescription = new SessionDescription(
+                    sessionDescription.type, modifiedSdp);
+                
+                Log.v(TAG, "Modified Offer SDP: " + fixedSessionDescription.description);
+                
+                peerConnection.setLocalDescription(new SdpObserver() {
+                    @Override
+                    public void onCreateSuccess(SessionDescription sessionDescription) {}
+                    
+                    @Override
+                    public void onSetSuccess() {
+                        Log.d(TAG, "Local description set successfully");
+                        // Send offer to client
+                        sendOffer(fixedSessionDescription);
+                    }
+                    
+                    @Override
+                    public void onCreateFailure(String s) {
+                        Log.e(TAG, "Failed to set local description (create): " + s);
+                    }
+                    
+                    @Override
+                    public void onSetFailure(String s) {
+                        Log.e(TAG, "Failed to set local description (set): " + s);
+                    }
+                }, fixedSessionDescription);
+            }
+            
+            @Override
+            public void onSetSuccess() {}
+            
+            @Override
+            public void onCreateFailure(String s) {
+                Log.e(TAG, "Failed to create offer: " + s);
+            }
+            
+            @Override
+            public void onSetFailure(String s) {}
+        }, constraints);
+    }
+    
+    private void sendOffer(SessionDescription offer) {
+        JsonObject offerMessage = new JsonObject();
+        offerMessage.addProperty("type", "offer");
+        offerMessage.addProperty("sdp", offer.description);
+        
+        webSocket.send(gson.toJson(offerMessage));
+        Log.d(TAG, "Sent offer to client");
+    }
+    
     public void handleOffer(JsonObject offerJson) {
         try {
-            // Create video track before handling offer
-            createVideoTrack();
+            // This method now handles offers from clients (but in our new flow, device creates offers)
+            // Keep it for backward compatibility
             
             String sdpString = offerJson.get("sdp").getAsString();
             String type = "offer";
@@ -132,6 +233,39 @@ public class WebRTCManager {
             
         } catch (Exception e) {
             Log.e(TAG, "Error handling offer", e);
+        }
+    }
+    
+    public void handleAnswer(JsonObject answerJson) {
+        try {
+            String sdpString = answerJson.get("sdp").getAsString();
+            String type = "answer";
+            
+            SessionDescription remoteDescription = new SessionDescription(
+                    SessionDescription.Type.fromCanonicalForm(type), sdpString);
+            
+            peerConnection.setRemoteDescription(new SdpObserver() {
+                @Override
+                public void onCreateSuccess(SessionDescription sessionDescription) {}
+                
+                @Override
+                public void onSetSuccess() {
+                    Log.d(TAG, "Remote answer set successfully");
+                }
+                
+                @Override
+                public void onCreateFailure(String s) {
+                    Log.e(TAG, "Failed to set remote answer: " + s);
+                }
+                
+                @Override
+                public void onSetFailure(String s) {
+                    Log.e(TAG, "Failed to set remote answer: " + s);
+                }
+            }, remoteDescription);
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error handling answer", e);
         }
     }
     
@@ -181,11 +315,7 @@ public class WebRTCManager {
     private void sendAnswer(SessionDescription answer) {
         JsonObject answerMessage = new JsonObject();
         answerMessage.addProperty("type", "answer");
-        
-        JsonObject sdpJson = new JsonObject();
-        sdpJson.addProperty("type", answer.type.canonicalForm());
-        sdpJson.addProperty("sdp", answer.description);
-        answerMessage.add("sdp", sdpJson);
+        answerMessage.addProperty("sdp", answer.description);
         
         webSocket.send(gson.toJson(answerMessage));
         Log.d(TAG, "Sent answer to client");
@@ -283,12 +413,9 @@ public class WebRTCManager {
     private void sendIceCandidate(IceCandidate candidate) {
         JsonObject candidateMessage = new JsonObject();
         candidateMessage.addProperty("type", "ice_candidate");
-        
-        JsonObject candidateJson = new JsonObject();
-        candidateJson.addProperty("candidate", candidate.sdp);
-        candidateJson.addProperty("sdpMid", candidate.sdpMid);
-        candidateJson.addProperty("sdpMLineIndex", candidate.sdpMLineIndex);
-        candidateMessage.add("candidate", candidateJson);
+        candidateMessage.addProperty("candidate", candidate.sdp);
+        candidateMessage.addProperty("sdpMid", candidate.sdpMid);
+        candidateMessage.addProperty("sdpMLineIndex", candidate.sdpMLineIndex);
         
         webSocket.send(gson.toJson(candidateMessage));
         Log.d(TAG, "Sent ICE candidate to client");

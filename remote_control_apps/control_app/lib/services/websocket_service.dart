@@ -95,6 +95,12 @@ class WebSocketService {
     });
   }
   
+  void requestWebRTCConnection() {
+    sendMessage({
+      'type': 'start_webrtc',
+    });
+  }
+  
   void dispose() {
     disconnect();
     _messageController.close();

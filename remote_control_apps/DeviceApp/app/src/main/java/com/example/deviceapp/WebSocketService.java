@@ -168,6 +168,9 @@ public class WebSocketService extends Service {
                 case "ping":
                     handlePing(conn, json);
                     break;
+                case "start_webrtc":
+                    handleStartWebRTC(conn, json);
+                    break;
                 case "offer":
                     handleOffer(conn, json);
                     break;
@@ -201,6 +204,27 @@ public class WebSocketService extends Service {
         Log.d(TAG, "Sent device info response");
     }
     
+    private void handleStartWebRTC(WebSocket conn, JsonObject json) {
+        Log.d(TAG, "Handling start WebRTC request");
+        
+        if (screenCaptureService == null) {
+            Log.e(TAG, "ScreenCaptureService not available");
+            return;
+        }
+        
+        // Create WebRTC manager for this connection if not exists
+        WebRTCManager webRTCManager = webRTCManagers.get(conn);
+        if (webRTCManager == null) {
+            webRTCManager = new WebRTCManager(this, screenCaptureService);
+            webRTCManager.createPeerConnection(conn);
+            webRTCManagers.put(conn, webRTCManager);
+        }
+        
+        // Create and send offer to client (device initiates with video track)
+        webRTCManager.createOfferWithVideo();
+        Log.d(TAG, "Created and sent WebRTC offer with video to client");
+    }
+    
     private void handleOffer(WebSocket conn, JsonObject json) {
         Log.d(TAG, "Handling WebRTC offer");
         
@@ -226,8 +250,10 @@ public class WebSocketService extends Service {
         
         WebRTCManager webRTCManager = webRTCManagers.get(conn);
         if (webRTCManager != null) {
-            // Note: Device typically doesn't receive answers, it sends them
-            Log.w(TAG, "Received unexpected answer from client");
+            // Handle answer from client (in new flow, device sends offer, client sends answer)
+            webRTCManager.handleAnswer(json);
+        } else {
+            Log.w(TAG, "No WebRTC manager found for answer");
         }
     }
     
