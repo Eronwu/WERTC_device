@@ -27,8 +27,9 @@ public class WebRTCManager {
     private ScreenCaptureService screenCaptureService;
     private TouchControlService touchControlService;
 
-    private final static int FRAME_RATE = 30; // the frame rate seems no effect with the screen capture
-    private final static int MAX_BITRATE = 500000; // Reduced to 0.5 Mbps for lower latency, before is 2000000
+    private final static int FRAME_RATE = 60; // Increased to 60 fps for lower latency
+    private final static int MAX_BITRATE = 8000000; // Increased to 8 Mbps for better quality and lower latency
+    private final static int MIN_BITRATE = 1000000; // Minimum 1 Mbps for consistent quality
     
     private static final String[] MANDATORY_FIELDS = {
         "OfferToReceiveAudio",
@@ -83,11 +84,17 @@ public class WebRTCManager {
         rtcConfig.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE; // Fast gathering
         
         // Aggressive low latency optimizations
-        rtcConfig.iceConnectionReceivingTimeout = 1000; // 1 second timeout
+        rtcConfig.iceConnectionReceivingTimeout = 500; // Reduced to 500ms for faster connection
         rtcConfig.keyType = PeerConnection.KeyType.ECDSA; // Faster key exchange
         rtcConfig.iceCandidatePoolSize = 0; // No pre-gathering for faster start
         rtcConfig.iceTransportsType = PeerConnection.IceTransportsType.ALL;
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN; // Modern standard
+        
+        // Additional ultra-low latency optimizations
+        rtcConfig.iceBackupCandidatePairPingInterval = 1000; // Faster backup candidate checking
+        rtcConfig.iceCheckMinInterval = 100; // Faster ICE connectivity checks
+//        rtcConfig.iceUnwritableTimeout = 1000; // Faster timeout for unwritable connections
+//        rtcConfig.iceWritableTimeout = 1000; // Faster timeout for writable connections
 
         peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, new PeerConnectionObserver());
         
@@ -134,11 +141,12 @@ public class WebRTCManager {
                     // Set up encoding parameters for low latency screen sharing
                     for (RtpParameters.Encoding encoding : parameters.encodings) {
                         encoding.maxBitrateBps = MAX_BITRATE;
-//                        encoding.minBitrateBps = 500000;  // Minimum 500 Kbps
+                        encoding.minBitrateBps = MIN_BITRATE;
                         encoding.maxFramerate = FRAME_RATE;
                         // TODO: need to set the value by setting button.
                         encoding.scaleResolutionDownBy = 2.0; // No downscaling
                         // Enable adaptive bitrate for network conditions
+                        // google-webrtc-1.0.32006 version don't have this attribute and it can adjust bps auto.
 //                        encoding.adaptive = true;
                     }
                     sender.setParameters(parameters);
@@ -176,9 +184,24 @@ public class WebRTCManager {
                 // Optimize SDP for low latency screen sharing
                 String modifiedSdp = sessionDescription.description
                     .replace("a=sendrecv", "a=sendonly")
-                        // if device can set VP8 over VP9 for lower latency, it will be good. but set VP8 is not work.
-                    // Force specific video parameters for performance
-                    .replace("a=fmtp:96", "a=fmtp:96 max-fr=30;max-fs=8160"); // Limit frame size
+                        .replace("a=fmtp:96", "a=fmtp:96 max-fr=60;max-fs=8160"); // Limit frame size
+//                    // Force VP8 codec for lower latency (VP8 has better low-latency performance than H.264)
+                        // RK3568 cannot support VP8 encoder!
+//                    .replace("a=rtpmap:96 H264/90000", "a=rtpmap:96 VP8/90000")
+//                    .replace("a=fmtp:96", "a=fmtp:96 max-fr=60;max-fs=8160;x-google-min-bitrate=1000000;x-google-max-bitrate=8000000;x-google-start-bitrate=4000000")
+                    // Add ultra-low latency RTP parameters
+//                    .replace("a=rtcp-fb:96", "a=rtcp-fb:96 nack\n" +
+//                                              "a=rtcp-fb:96 nack pli\n" +
+//                                              "a=rtcp-fb:96 ccm fir\n" +
+//                                              "a=rtcp-fb:96 goog-remb\n" +
+//                                              "a=rtcp-fb:96 transport-cc")
+                    // Add jitter buffer optimization
+//                    .replace("a=rtpmap:96", "a=rtpmap:96") + "\n" +
+//                    "a=x-google-min-bitrate:1000000\n" +
+//                    "a=x-google-max-bitrate:8000000\n" +
+//                    "a=x-google-start-bitrate:4000000\n" +
+//                    "a=x-google-cpu-overuse-detection:false\n" +
+//                    "a=x-google-congestion-window:false";
                     
                 SessionDescription fixedSessionDescription = new SessionDescription(
                     sessionDescription.type, modifiedSdp);

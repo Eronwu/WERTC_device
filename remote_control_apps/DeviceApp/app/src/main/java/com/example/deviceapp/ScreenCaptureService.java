@@ -16,9 +16,6 @@ import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
 import android.view.WindowManager;
-import android.os.Environment;
-import android.media.MediaRecorder;
-import android.media.MediaMuxer;
 
 import org.webrtc.VideoSource;
 import org.webrtc.VideoFrame;
@@ -30,13 +27,6 @@ import org.webrtc.SurfaceTextureHelper;
 import org.webrtc.EglBase;
 import org.webrtc.CapturerObserver;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -48,7 +38,11 @@ import android.os.HandlerThread;
 
 public class ScreenCaptureService extends Service {
     private static final String TAG = "ScreenCaptureService";
-    private static final int FRAME_RATE = 30; // the frame rate seems not effect with the screen capture
+    private static final int FRAME_RATE = 60; // Increased to 60 fps for ultra-low latency
+    
+    // Frame rate control
+    private static final long TARGET_FRAME_INTERVAL_NS = 1000000000L / FRAME_RATE; // 16.67ms for 60fps
+    private long lastFrameTimeNs = 0;
     
     // WebRTC screen capture components
     private ScreenCapturerAndroid screenCapturer;
@@ -106,22 +100,52 @@ public class ScreenCaptureService extends Service {
         
         @Override
         public void onFrameCaptured(VideoFrame frame) {
-            int currentFrame = frameCount.incrementAndGet();
+            // TODO: current webrtc cannot support drop frame for unknown reason.
+//            int currentFrame = frameCount.incrementAndGet();
+//
+//            // Frame rate control for ultra-low latency
+//            long currentTimeNs = System.nanoTime();
+//            if (lastFrameTimeNs > 0) {
+//                long timeSinceLastFrame = currentTimeNs - lastFrameTimeNs;
+//                if (timeSinceLastFrame < TARGET_FRAME_INTERVAL_NS) {
+//                    // Drop frame to maintain target frame rate - use retain/release properly
+//                    try {
+//                        frame.release();
+//                    } catch (Exception e) {
+//                        Log.w(TAG, "Frame already released during rate control: " + e.getMessage());
+//                    }
+//                    return;
+//                }
+//            }
+//            lastFrameTimeNs = currentTimeNs;
 
-            // Only for debug log
-//            Log.d(TAG, "Frame captured: " + currentFrame + ", timestamp: " + frame.getTimestampNs() +
-//                      ", size: " + frame.getBuffer().getWidth() + "x" + frame.getBuffer().getHeight());
+            // Only for debug log (commented out for performance)
+            // Log.d(TAG, "Frame captured: " + currentFrame + ", timestamp: " + frame.getTimestampNs() +
+            //           ", size: " + frame.getBuffer().getWidth() + "x" + frame.getBuffer().getHeight());
             
             // Send frame to WebRTC VideoSource through CapturerObserver
             if (videoSource != null && videoSource.getCapturerObserver() != null) {
                 try {
+                    // VideoSource will handle frame lifecycle, don't release here
                     videoSource.getCapturerObserver().onFrameCaptured(frame);
-//                    Log.v(TAG, "Frame sent to WebRTC VideoSource successfully");
+                    // Log.v(TAG, "Frame sent to WebRTC VideoSource successfully");
                 } catch (Exception e) {
                     Log.e(TAG, "Error sending frame to VideoSource", e);
+                    // Only release on error if frame hasn't been consumed
+//                    try {
+//                        frame.release();
+//                    } catch (Exception releaseError) {
+//                        Log.w(TAG, "Frame already released during error handling: " + releaseError.getMessage());
+//                    }
                 }
             } else {
                 Log.w(TAG, "VideoSource or CapturerObserver is null, cannot send frame");
+                // Only release if frame hasn't been consumed
+                try {
+                    frame.release();
+                } catch (Exception e) {
+                    Log.w(TAG, "Frame already released when VideoSource unavailable: " + e.getMessage());
+                }
             }
         }
     }
@@ -150,7 +174,17 @@ public class ScreenCaptureService extends Service {
 
             Log.d(TAG, "get parcelable data from MainActivity: " + data);
             if (resultCode == MainActivity.RESULT_OK && data != null) {
-                startScreenCapture(resultCode, data);
+                this.mediaProjectionResultCode = resultCode;
+                this.mediaProjectionData = data;
+
+                // If VideoSource is already available, start capture.
+                // Otherwise, capture will be started when setVideoSource is called.
+                if (videoSource != null && !isCapturing) {
+                    Log.d(TAG, "VideoSource is ready, starting screen capture immediately.");
+                    startScreenCapture(resultCode, data);
+                } else {
+                    Log.d(TAG, "VideoSource not yet available. Storing projection data. Capture will start when WebRTC is ready.");
+                }
             }
         }
         return START_STICKY;

@@ -21,9 +21,17 @@ class WebRTCService {
   }
   
   Future<void> initialize() async {
-    // Create peer connection - removed STUN for local network optimization
+    // Create peer connection with ultra-low latency optimizations
     final configuration = {
       'iceServers': [], // Empty for local network only
+      'iceCandidatePoolSize': 0, // No pre-gathering for faster start
+      'bundlePolicy': 'max-bundle', // Optimize bundle policy
+      'rtcpMuxPolicy': 'require', // Require RTCP muxing
+      'iceConnectionReceivingTimeout': 500, // Faster timeout
+      'iceBackupCandidatePairPingInterval': 1000, // Faster backup checking
+      'iceCheckMinInterval': 100, // Faster ICE checks
+      'iceUnwritableTimeout': 1000, // Faster unwritable timeout
+      'iceWritableTimeout': 1000, // Faster writable timeout
     };
     
     _peerConnection = await createPeerConnection(configuration);
@@ -111,13 +119,17 @@ class WebRTCService {
   Future<void> createOffer() async {
     if (_peerConnection == null) return;
     
-    // Create offer with video constraints - use proper MediaConstraints format
+    // Create offer with ultra-low latency video constraints
     final constraints = <String, dynamic>{
       'mandatory': <String, dynamic>{
         'OfferToReceiveAudio': false,
         'OfferToReceiveVideo': true,
       },
-      'optional': <Map<String, dynamic>>[],
+      'optional': <Map<String, dynamic>>[
+        {'DtlsSrtpKeyAgreement': true}, // Enable SRTP for security
+        {'googCpuOveruseDetection': false}, // Disable CPU overuse detection for lower latency
+        {'googCpuOveruseDetection': false}, // Disable congestion window for lower latency
+      ],
     };
     
     final offer = await _peerConnection!.createOffer(constraints);
@@ -163,13 +175,17 @@ class WebRTCService {
       RTCSessionDescription(sdp, 'offer'),
     );
     
-    // Create answer - let WebRTC handle the direction based on the offer
+    // Create answer with ultra-low latency constraints
     final constraints = <String, dynamic>{
       'mandatory': <String, dynamic>{
         'OfferToReceiveAudio': false,
         'OfferToReceiveVideo': true,
       },
-      'optional': <Map<String, dynamic>>[],
+      'optional': <Map<String, dynamic>>[
+        {'DtlsSrtpKeyAgreement': true}, // Enable SRTP for security
+        {'googCpuOveruseDetection': false}, // Disable CPU overuse detection for lower latency
+        {'googCpuOveruseDetection': false}, // Disable congestion window for lower latency
+      ],
     };
     
     debugPrint('Creating answer');
